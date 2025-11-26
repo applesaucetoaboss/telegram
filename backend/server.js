@@ -5,7 +5,11 @@ const path = require('path');
 const express = require('express');
 const multer = require('multer');
 const ffmpeg = require('fluent-ffmpeg');
-const Replicate = require('@replicate/replicate-js');
+const Replicate = require('replicate');
+const ffmpegPath = require('ffmpeg-static');
+if (ffmpegPath) {
+  ffmpeg.setFfmpegPath(ffmpegPath);
+}
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
