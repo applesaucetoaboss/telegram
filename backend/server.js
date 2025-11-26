@@ -6,8 +6,12 @@ const express = require('express');
 const multer = require('multer');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static');
+const ffprobePath = require('ffprobe-static');
 if (ffmpegPath) {
   ffmpeg.setFfmpegPath(ffmpegPath);
+}
+if (ffprobePath && ffprobePath.path) {
+  ffmpeg.setFfprobePath(ffprobePath.path);
 }
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
