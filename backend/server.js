@@ -388,6 +388,21 @@ bot.action('menu', async ctx => {
   await ctx.reply(`Main Menu\nPoints: ${u.points}\nInvite: ${referral_link}${promo_link ? '\nPromo: ' + promo_link : ''}`, keyboard);
 });
 
+bot.command('menu', async ctx => {
+  const id = String(ctx.from.id);
+  const u = getOrCreateUser(id);
+  const referral_link = `/?ref=${u.id}`;
+  const botUsername = process.env.BOT_USERNAME || '';
+  const promo_link = botUsername ? `https://t.me/${botUsername}?start=promo_${u.id}` : '';
+  const keyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('Points', 'points'), Markup.button.callback('Check-In', 'checkin')],
+    [Markup.button.callback('Buy Points', 'buy'), Markup.button.callback('Faceswap', 'faceswap')],
+    [Markup.button.callback('Create Video', 'createvideo'), Markup.button.callback('Leaderboard', 'leaderboard')],
+    [Markup.button.callback('Clone', 'clone'), Markup.button.callback('Help', 'help')]
+  ]);
+  await ctx.reply(`Main Menu\nPoints: ${u.points}\nInvite: ${referral_link}${promo_link ? '\nPromo: ' + promo_link : ''}`, keyboard);
+});
+
 bot.action('points', async ctx => {
   const u = getOrCreateUser(String(ctx.from.id));
   await ctx.answerCbQuery();
@@ -679,16 +694,40 @@ bot.on('video', async ctx => {
 });
 
 bot.on('channel_post', async ctx => {
-  await ctx.reply('Bot active');
+  const u = process.env.BOT_USERNAME || '';
+  const link = u ? `https://t.me/${u}` : 'https://t.me';
+  await ctx.reply(`Bot active. DM ${link} to use features.`);
 });
 
-bot.launch();
+bot.catch(err => console.error('Bot error:', err));
+
+if (process.env.BOT_TOKEN) {
+  bot.telegram.setMyCommands([
+    { command: 'menu', description: 'Open main menu' },
+    { command: 'faceswap', description: 'Swap face using your photo/video' },
+    { command: 'confirm', description: 'Confirm Stripe session id' },
+    { command: 'help', description: 'Show help' }
+  ]);
+  bot.launch().then(() => console.log('Bot launched')).catch(e => console.error('Bot launch error', e));
+} else {
+  console.error('Missing BOT_TOKEN');
+}
 
 console.log('Server is about to start...');
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 bot.action('help', async ctx => {
   await ctx.answerCbQuery();
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.callback('Main Menu', 'menu')],
+    [Markup.button.callback('Buy Points', 'buy')],
+    [Markup.button.callback('Faceswap', 'faceswap'), Markup.button.callback('Create Video', 'createvideo')],
+    [Markup.button.callback('Check-In', 'checkin'), Markup.button.callback('Leaderboard', 'leaderboard')]
+  ]);
+  await ctx.reply('Use the buttons below to perform actions. No typing needed. Buy points to unlock features, then try Faceswap or Create Video. Check-In daily for bonuses. Share Clone links to earn 20% rewards.', kb);
+});
+
+bot.command('help', async ctx => {
   const kb = Markup.inlineKeyboard([
     [Markup.button.callback('Main Menu', 'menu')],
     [Markup.button.callback('Buy Points', 'buy')],
