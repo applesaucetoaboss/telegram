@@ -15,7 +15,6 @@ if (ffprobePath && ffprobePath.path) {
   ffmpeg.setFfprobePath(ffprobePath.path);
 }
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const Replicate = require('replicate');
 
 const app = express();
 const uploadsDir = path.join(__dirname, 'uploads');
