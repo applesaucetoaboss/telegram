@@ -450,31 +450,50 @@ bot.action('leaderboard', async ctx => {
 bot.action('buy', async ctx => {
   await ctx.answerCbQuery();
   const rows = PRICING.map(t => [Markup.button.callback(`${t.points} / $${t.usd}`, `buy:${t.id}`)]);
-  await ctx.reply('Select a package:', Markup.inlineKeyboard(rows));
+  try {
+    await ctx.reply('Select a package:', Markup.inlineKeyboard(rows));
+  } catch (e) {
+    try { await bot.telegram.sendMessage(ctx.from.id, 'Select a package:', Markup.inlineKeyboard(rows)); } catch (_) {}
+  }
 });
 
 bot.action(/buy:(.+)/, async ctx => {
   await ctx.answerCbQuery();
-  const tierId = ctx.match[1];
-  const id = String(ctx.from.id);
-  const tier = PRICING.find(t => t.id === tierId);
-  if (!tier) return ctx.reply('Not found');
-  const origin = (process.env.PUBLIC_URL || process.env.PUBLIC_ORIGIN || (process.env.BOT_USERNAME ? `https://t.me/${process.env.BOT_USERNAME}` : 'https://t.me'));
-  const chatMeta = (ctx.chat && ctx.chat.type === 'channel') ? String(ctx.from.id) : String(ctx.chat.id);
-  const session = await stripe.checkout.sessions.create({
-    payment_method_types: ['card'],
-    line_items: [{ price_data: { currency: 'usd', product_data: { name: `${tier.points} Points` }, unit_amount: Math.round(tier.usd * 100) }, quantity: 1 }],
-    mode: 'payment',
-    success_url: `${origin}/?success=1&session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${origin}/?cancel=1`,
-    metadata: { userId: String(id), tierId, chatId: chatMeta, promoterId: String(getOrCreateUser(id).promoter_id || '') }
-  });
-  const kb = Markup.inlineKeyboard([
-    [Markup.button.url(`Pay $${tier.usd}`, session.url || 'https://stripe.com')],
-    [Markup.button.callback('Confirm Payment', `confirm:${session.id}`)],
-    [Markup.button.callback('Main Menu', 'menu')]
-  ]);
-  await ctx.reply('Complete your purchase, then tap Confirm:', kb);
+  try {
+    const tierId = ctx.match[1];
+    const id = String(ctx.from.id);
+    const tier = PRICING.find(t => t.id === tierId);
+    if (!tier) return ctx.reply('Not found');
+    const originRaw = (process.env.PUBLIC_URL || process.env.PUBLIC_ORIGIN || (process.env.BOT_USERNAME ? `https://t.me/${process.env.BOT_USERNAME}` : 'https://t.me'));
+    const origin = String(originRaw).trim().replace(/^`+|`+$/g, '');
+    const chatMeta = (ctx.chat && ctx.chat.type === 'channel') ? String(ctx.from.id) : String(ctx.chat.id);
+    let session;
+    try {
+      session = await stripe.checkout.sessions.create({
+        payment_method_types: ['card'],
+        line_items: [{ price_data: { currency: 'usd', product_data: { name: `${tier.points} Points` }, unit_amount: Math.round(tier.usd * 100) }, quantity: 1 }],
+        mode: 'payment',
+        success_url: `${origin}/?success=1&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${origin}/?cancel=1`,
+        metadata: { userId: String(id), tierId, chatId: chatMeta, promoterId: String(getOrCreateUser(id).promoter_id || '') }
+      });
+    } catch (e) {
+      try { await bot.telegram.sendMessage(id, `Payment error: ${e.message}`); } catch (_) {}
+      return;
+    }
+    const kb = Markup.inlineKeyboard([
+      [Markup.button.url(`Pay $${tier.usd}`, session.url || 'https://stripe.com')],
+      [Markup.button.callback('Confirm Payment', `confirm:${session.id}`)],
+      [Markup.button.callback('Main Menu', 'menu')]
+    ]);
+    try {
+      await ctx.reply('Complete your purchase, then tap Confirm:', kb);
+    } catch (e) {
+      try { await bot.telegram.sendMessage(id, 'Complete your purchase, then tap Confirm:', kb); } catch (_) {}
+    }
+  } catch (e) {
+    try { await ctx.reply(`Error: ${e.message}`); } catch (_) {}
+  }
 });
 
 bot.action(/confirm:(.+)/, async ctx => {
@@ -641,7 +660,7 @@ bot.action('faceswap', async ctx => {
   } else {
     pending[String(ctx.from.id)] = { mode: 'faceswap', swap: null, target: null };
   }
-  await ctx.reply('Send a photo of the face to swap, then a target video (optional).');
+  try { await ctx.reply('Send a photo of the face to swap, then a target video (optional).'); } catch (e) { try { await bot.telegram.sendMessage(ctx.from.id, 'Send a photo of the face to swap, then a target video (optional).'); } catch (_) {} }
 });
 
 bot.action('createvideo', async ctx => {
@@ -652,7 +671,7 @@ bot.action('createvideo', async ctx => {
   } else {
     pending[String(ctx.from.id)] = { mode: 'createvideo', photo: null, video: null };
   }
-  await ctx.reply('Send overlay photo, then base video.');
+  try { await ctx.reply('Send overlay photo, then base video.'); } catch (e) { try { await bot.telegram.sendMessage(ctx.from.id, 'Send overlay photo, then base video.'); } catch (_) {} }
 });
 
 bot.on('photo', async ctx => {
@@ -1025,6 +1044,21 @@ bot.command('help', async ctx => {
     [Markup.button.callback('Check-In', 'checkin'), Markup.button.callback('Leaderboard', 'leaderboard')]
   ]);
   await ctx.reply('Use the buttons below to perform actions. No typing needed. Buy points to unlock features, then try Faceswap or Create Video. Check-In daily for bonuses. Share Clone links to earn 20% rewards.', kb);
+});
+
+bot.command('buy', async ctx => {
+  const rows = PRICING.map(t => [Markup.button.callback(`${t.points} / $${t.usd}`, `buy:${t.id}`)]);
+  await ctx.reply('Select a package:', Markup.inlineKeyboard(rows));
+});
+
+bot.command('createvideo', async ctx => {
+  const isChannel = (ctx.chat && ctx.chat.type) === 'channel';
+  if (isChannel) {
+    pendingChannel[String(ctx.chat.id)] = { mode: 'createvideo', photo: null, video: null };
+  } else {
+    pending[String(ctx.from.id)] = { mode: 'createvideo', photo: null, video: null };
+  }
+  await ctx.reply('Send overlay photo, then base video.');
 });
 
 bot.command('pricing', async ctx => {
