@@ -278,7 +278,7 @@ bot.use(async (ctx, next) => { try { console.log('update', ctx.updateType, ctx.u
 app.get('/healthz', async (req, res) => {
   try {
     const info = await bot.telegram.getWebhookInfo();
-    res.json({ mode: global.__botLaunchMode || 'none', webhook_info: info, env: { BOT_TOKEN: !!process.env.BOT_TOKEN, PUBLIC_URL: !!process.env.PUBLIC_URL, PUBLIC_ORIGIN: !!process.env.PUBLIC_ORIGIN } });
+    res.json({ mode: global.__botLaunchMode || 'none', webhook_info: info, env: { BOT_TOKEN: !!process.env.BOT_TOKEN, PUBLIC_URL: !!process.env.PUBLIC_URL, PUBLIC_ORIGIN: !!process.env.PUBLIC_ORIGIN, STRIPE_SECRET_KEY: !!process.env.STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET: !!process.env.STRIPE_WEBHOOK_SECRET, REPLICATE_API_TOKEN: !!process.env.REPLICATE_API_TOKEN } });
   } catch (e) {
     res.json({ mode: global.__botLaunchMode || 'none', error: e.message });
   }
