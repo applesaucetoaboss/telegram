@@ -514,14 +514,7 @@ bot.action('buy', async ctx => {
   const rows = PRICING.map(t => [Markup.button.callback(`${t.points} / $${t.usd}`, `buy:${t.id}`)]);
   try {
     await ctx.reply('Select a package:', Markup.inlineKeyboard(rows));
-  } catch (e) {
-    try { await bot.telegram.sendMessage(ctx.from.id, 'Select a package:', Markup.inlineKeyboard(rows)); }
-    catch (_) {
-      const botUsername = process.env.BOT_USERNAME || '';
-      const hint = botUsername ? `Start a chat: https://t.me/${botUsername}` : 'Start a chat with the bot to receive payment link';
-      try { await ctx.answerCbQuery(hint); } catch (_) {}
-    }
-  }
+  } catch (_) {}
 });
 
 bot.action(/buy:(.+)/, async ctx => {
@@ -545,12 +538,7 @@ bot.action(/buy:(.+)/, async ctx => {
         metadata: { userId: String(id), tierId, chatId: chatMeta, promoterId: String(getOrCreateUser(id).promoter_id || '') }
       });
     } catch (e) {
-      try { await bot.telegram.sendMessage(id, `Payment error: ${e.message}`); } catch (_) {}
-      try {
-        const botUsername = process.env.BOT_USERNAME || '';
-        const hint = botUsername ? `Start a chat: https://t.me/${botUsername}` : 'Start a chat with the bot to receive payment link';
-        await ctx.answerCbQuery(hint);
-      } catch (_) {}
+      try { await ctx.reply(`Payment error: ${e.message}`); } catch (_) {}
       return;
     }
     const kb = Markup.inlineKeyboard([
@@ -560,14 +548,7 @@ bot.action(/buy:(.+)/, async ctx => {
     ]);
     try {
       await ctx.reply('Complete your purchase, then tap Confirm:', kb);
-    } catch (e) {
-      try { await bot.telegram.sendMessage(id, 'Complete your purchase, then tap Confirm:', kb); }
-      catch (_) {
-        const botUsername = process.env.BOT_USERNAME || '';
-        const hint = botUsername ? `Start a chat: https://t.me/${botUsername}` : 'Start a chat with the bot to receive payment link';
-        try { await ctx.answerCbQuery(hint); } catch (_) {}
-      }
-    }
+    } catch (_) {}
   } catch (e) {
     try { await ctx.reply(`Error: ${e.message}`); } catch (_) {}
   }
@@ -578,19 +559,19 @@ bot.action(/confirm:(.+)/, async ctx => {
   const sessionId = ctx.match[1];
   const r = await stripe.checkout.sessions.retrieve(sessionId);
   if (!r || (r.payment_status !== 'paid' && r.status !== 'complete')) {
-    try { return await ctx.reply('Payment not completed'); } catch (_) { try { await bot.telegram.sendMessage(ctx.from.id, 'Payment not completed'); } catch (e2) {} return; }
+    try { return await ctx.reply('Payment not completed'); } catch (_) { return; }
   }
   const data = loadData();
   if (data.purchases[sessionId]) {
     const uid = r.metadata && r.metadata.userId;
     const u = uid ? data.users[uid] : null;
-    try { return await ctx.reply(`Already processed. Points: ${u ? u.points : ''}`); } catch (_) { try { await bot.telegram.sendMessage(ctx.from.id, `Already processed. Points: ${u ? u.points : ''}`); } catch (e2) {} return; }
+    try { return await ctx.reply(`Already processed. Points: ${u ? u.points : ''}`); } catch (_) { return; }
   }
   const uid = r.metadata && r.metadata.userId;
   const tierId = r.metadata && r.metadata.tierId;
   const u = uid ? data.users[uid] : null;
   const tier = PRICING.find(t => t.id === tierId);
-  if (!u || !tier) { try { return await ctx.reply('Not found'); } catch (_) { try { await bot.telegram.sendMessage(ctx.from.id, 'Not found'); } catch (e2) {} return; } }
+  if (!u || !tier) { try { return await ctx.reply('Not found'); } catch (_) { return; } }
   const firstBonus = u.has_recharged ? 0 : 0.20;
   const loyaltyBonus = tier.tierBonus;
   const addPoints = Math.floor(tier.points * (1 + firstBonus + loyaltyBonus));
@@ -605,7 +586,7 @@ bot.action(/confirm:(.+)/, async ctx => {
   }
   data.purchases[sessionId] = true;
   saveData(data);
-  try { await ctx.reply(`Credited ${addPoints} points. Balance: ${u.points}`); } catch (_) { try { await bot.telegram.sendMessage(ctx.from.id, `Credited ${addPoints} points. Balance: ${u.points}`); } catch (e2) {} }
+  try { await ctx.reply(`Credited ${addPoints} points. Balance: ${u.points}`); } catch (_) {}
 });
 
 bot.command('confirm', async ctx => {
@@ -739,7 +720,7 @@ bot.action('faceswap', async ctx => {
   } else {
     pending[String(ctx.from.id)] = { mode: 'faceswap', swap: null, target: null };
   }
-  try { await ctx.reply('Send a photo of the face to swap, then a target video (optional).'); } catch (e) { try { await bot.telegram.sendMessage(ctx.from.id, 'Send a photo of the face to swap, then a target video (optional).'); } catch (_) {} }
+  try { await ctx.reply('Send a photo of the face to swap, then a target video (optional).'); } catch (_) {}
 });
 
 bot.action('createvideo', async ctx => {
@@ -750,7 +731,7 @@ bot.action('createvideo', async ctx => {
   } else {
     pending[String(ctx.from.id)] = { mode: 'createvideo', photo: null, video: null };
   }
-  try { await ctx.reply('Send overlay photo, then base video.'); } catch (e) { try { await bot.telegram.sendMessage(ctx.from.id, 'Send overlay photo, then base video.'); } catch (_) {} }
+  try { await ctx.reply('Send overlay photo, then base video.'); } catch (_) {}
 });
 
 bot.on('photo', async ctx => {
