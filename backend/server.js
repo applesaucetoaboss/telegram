@@ -956,12 +956,13 @@ bot.on('message', async ctx => {
   const type = ctx.chat && ctx.chat.type;
   if (type === 'group' || type === 'supergroup') {
     const kb = Markup.inlineKeyboard([
-      [Markup.button.callback('Prices', 'pricing'), Markup.button.callback('Help', 'help')],
-      [Markup.button.callback('Buy Points', 'buy'), Markup.button.callback('Promote', 'promote')],
+      [Markup.button.callback('Image Face Swap', 'imageswap'), Markup.button.callback('Video Face Swap', 'faceswap')],
+      [Markup.button.callback('Buy Points', 'buy'), Markup.button.callback('Prices', 'pricing')],
+      [Markup.button.callback('Help', 'help'), Markup.button.callback('Promote', 'promote')],
       [Markup.button.callback('Menu', 'menu')]
     ]);
     const lines = PRICING.map(t => `${t.points} points / $${t.usd}`);
-    await ctx.reply(`Welcome! Use the buttons below or type commands.\nPrices:\n${lines.join('\n')}`, kb);
+    await ctx.reply(`Faceswap Service\nImage Face Swap: send swap photo, then target photo. Cost: 9 points.\nVideo Face Swap: send swap photo, then target video trimmed to the length you want. Cost: 3 points per second.\n\nPrices (point packages):\n${lines.join('\n')}`, kb);
   }
 });
 
@@ -969,12 +970,13 @@ bot.on('chat_member', async ctx => {
   const type = ctx.chat && ctx.chat.type;
   if (type === 'group' || type === 'supergroup' || type === 'channel') {
     const kb = Markup.inlineKeyboard([
-      [Markup.button.callback('Prices', 'pricing'), Markup.button.callback('Help', 'help')],
-      [Markup.button.callback('Buy Points', 'buy'), Markup.button.callback('Promote', 'promote')],
+      [Markup.button.callback('Image Face Swap', 'imageswap'), Markup.button.callback('Video Face Swap', 'faceswap')],
+      [Markup.button.callback('Buy Points', 'buy'), Markup.button.callback('Prices', 'pricing')],
+      [Markup.button.callback('Help', 'help'), Markup.button.callback('Promote', 'promote')],
       [Markup.button.callback('Menu', 'menu')]
     ]);
     const lines = PRICING.map(t => `${t.points} points / $${t.usd}`);
-    await ctx.reply(`Welcome! Use the buttons below or type commands.\nPrices:\n${lines.join('\n')}`, kb);
+    await ctx.reply(`Faceswap Service\nImage Face Swap: send swap photo, then target photo. Cost: 9 points.\nVideo Face Swap: send swap photo, then target video trimmed to the length you want. Cost: 3 points per second.\n\nPrices (point packages):\n${lines.join('\n')}`, kb);
   }
 });
 
