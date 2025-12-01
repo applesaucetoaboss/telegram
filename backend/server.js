@@ -1271,7 +1271,7 @@ bot.action('help', async ctx => {
   await ctx.answerCbQuery();
   const kb = Markup.inlineKeyboard([
     [Markup.button.callback('Main Menu', 'menu')],
-    [Markup.button.callback('Faceswap', 'faceswap'), Markup.button.callback('Create Video', 'createvideo')],
+    [Markup.button.callback('Video Face Swap', 'faceswap'), Markup.button.callback('Create Video', 'createvideo')],
     [Markup.button.callback('Buy Points', 'buy'), Markup.button.callback('Prices', 'pricing')],
     [Markup.button.callback('Check-In', 'checkin'), Markup.button.callback('Leaderboard', 'leaderboard')]
   ]);
