@@ -1,4 +1,4 @@
-require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+require('dotenv').config();
 console.log('Server script started');
 try { console.log('Stripe key length:', (process.env.STRIPE_SECRET_KEY || '').length); } catch (_) {}
 const fs = require('fs');
