@@ -1217,7 +1217,7 @@ function channelKeyboard() {
     [Markup.button.callback('Image Face Swap', 'imageswap'), Markup.button.callback('Video Face Swap', 'faceswap')],
     [Markup.button.callback('Buy Points', 'buy'), Markup.button.callback('Prices', 'pricing')],
     [Markup.button.callback('Help', 'help'), Markup.button.callback('Promote', 'promote')],
-    [Markup.button.callback('Menu', 'menu')]
+    [Markup.button.callback('Menu', 'menu'), Markup.button.callback('Refresh', 'refresh')]
   ]);
 }
 function channelGreetText() {
@@ -1373,5 +1373,15 @@ bot.command('resolve', async ctx => {
     await ctx.reply(`chat.id: ${String(info.id)}\nchat.type: ${info.type || ''}\nchat.title: ${info.title || ''}`);
   } catch (e) {
     await ctx.reply('Unable to resolve');
+  }
+});
+bot.action('refresh', async ctx => {
+  await ctx.answerCbQuery('Refreshing…');
+  const chatId = String(ctx.chat && ctx.chat.id || '');
+  if (!chatId) return;
+  try {
+    await postChannelGreet(chatId);
+  } catch (e) {
+    try { await ctx.reply('Unable to refresh menu. Ensure bot can post and pin.'); } catch (_) {}
   }
 });
