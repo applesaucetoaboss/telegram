@@ -1,5 +1,6 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 console.log('Server script started');
+try { console.log('Stripe key length:', (process.env.STRIPE_SECRET_KEY || '').length); } catch (_) {}
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -328,10 +329,14 @@ bot.use(async (ctx, next) => { try { console.log('update', ctx.updateType, ctx.u
 
 app.get('/healthz', async (req, res) => {
   try {
+    const baseRaw = (process.env.PUBLIC_URL || process.env.PUBLIC_ORIGIN || '');
+    const base = String(baseRaw).trim().replace(/^['"`]+|['"`]+$/g, '');
     const info = await bot.telegram.getWebhookInfo();
-    res.json({ mode: global.__botLaunchMode || 'none', webhook_info: info, env: { BOT_TOKEN: !!process.env.BOT_TOKEN, PUBLIC_URL: !!process.env.PUBLIC_URL, PUBLIC_ORIGIN: !!process.env.PUBLIC_ORIGIN, STRIPE_SECRET_KEY: !!process.env.STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET: !!process.env.STRIPE_WEBHOOK_SECRET, API_MARKET_KEY: !!(process.env.API_MARKET_KEY || process.env.MAGICAPI_KEY) } });
+    res.json({ mode: global.__botLaunchMode || 'none', webhook_info: info, origin_base: base, env: { BOT_TOKEN: !!process.env.BOT_TOKEN, PUBLIC_URL: !!process.env.PUBLIC_URL, PUBLIC_ORIGIN: !!process.env.PUBLIC_ORIGIN, STRIPE_SECRET_KEY: !!process.env.STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET: !!process.env.STRIPE_WEBHOOK_SECRET, API_MARKET_KEY: !!(process.env.API_MARKET_KEY || process.env.MAGICAPI_KEY) } });
   } catch (e) {
-    res.json({ mode: global.__botLaunchMode || 'none', error: e.message });
+    const baseRaw = (process.env.PUBLIC_URL || process.env.PUBLIC_ORIGIN || '');
+    const base = String(baseRaw).trim().replace(/^['"`]+|['"`]+$/g, '');
+    res.json({ mode: global.__botLaunchMode || 'none', origin_base: base, error: e.message });
   }
 });
 
@@ -514,7 +519,9 @@ bot.action('buy', async ctx => {
   const rows = PRICING.map(t => [Markup.button.callback(`${t.points} / $${t.usd}`, `buy:${t.id}`)]);
   try {
     await ctx.reply('Select a package:', Markup.inlineKeyboard(rows));
-  } catch (_) {}
+  } catch (e) {
+    try { await ctx.answerCbQuery('Cannot post in channel. Grant bot posting permission.'); } catch (_) {}
+  }
 });
 
 bot.action(/buy:(.+)/, async ctx => {
@@ -524,9 +531,17 @@ bot.action(/buy:(.+)/, async ctx => {
     const id = String(ctx.from.id);
     const tier = PRICING.find(t => t.id === tierId);
     if (!tier) return ctx.reply('Not found');
+    try { await ctx.reply('Preparing checkout…'); } catch (_) {}
     const originRaw = (process.env.PUBLIC_URL || process.env.PUBLIC_ORIGIN || (process.env.BOT_USERNAME ? `https://t.me/${process.env.BOT_USERNAME}` : 'https://t.me'));
     const origin = String(originRaw).trim().replace(/^['"`]+|['"`]+$/g, '');
+    try { console.log('Checkout origin:', origin); } catch (_) {}
+    const invalidOrigin = (!/^https:\/\//i.test(origin)) || /(^https?:\/\/t\.me)/i.test(origin) || /(^https?:\/\/localhost)|(^https?:\/\/127\.0\.0\.1)/i.test(origin);
+    if (invalidOrigin) {
+      try { await ctx.reply('Invalid checkout origin. Set PUBLIC_URL to your HTTPS host.'); } catch (_) { try { await ctx.answerCbQuery('Invalid origin. Set PUBLIC_URL'); } catch (e2) {} }
+      return;
+    }
     const chatMeta = String(ctx.chat && ctx.chat.id);
+    const chatId = String(ctx.chat && ctx.chat.id || '');
     let session;
     try {
       session = await stripe.checkout.sessions.create({
@@ -537,7 +552,9 @@ bot.action(/buy:(.+)/, async ctx => {
         cancel_url: `${origin}/?cancel=1`,
         metadata: { userId: String(id), tierId, chatId: chatMeta, promoterId: String(getOrCreateUser(id).promoter_id || '') }
       });
+      try { await ctx.answerCbQuery('Checkout ready'); } catch (_) {}
     } catch (e) {
+      try { console.error('Stripe session create error', e); } catch (_) {}
       try { await ctx.reply(`Payment error: ${e.message}`); } catch (_) {}
       return;
     }
@@ -546,9 +563,16 @@ bot.action(/buy:(.+)/, async ctx => {
       [Markup.button.callback('Confirm Payment', `confirm:${session.id}`)],
       [Markup.button.callback('Main Menu', 'menu')]
     ]);
+    const msgText = `Complete your purchase, then tap Confirm.\nPay $${tier.usd}: ${session.url || 'https://stripe.com'}`;
     try {
-      await ctx.reply('Complete your purchase, then tap Confirm:', kb);
-    } catch (_) {}
+      if (chatId) {
+        await bot.telegram.sendMessage(chatId, msgText, { reply_markup: kb.reply_markup });
+      } else {
+        await ctx.reply(msgText, kb);
+      }
+    } catch (e) {
+      try { await ctx.reply(msgText); } catch (_) { try { await ctx.answerCbQuery('Cannot post payment link in channel. Check bot permissions.'); } catch (e2) {} }
+    }
   } catch (e) {
     try { await ctx.reply(`Error: ${e.message}`); } catch (_) {}
   }
