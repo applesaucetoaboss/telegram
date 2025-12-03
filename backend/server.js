@@ -1134,6 +1134,7 @@ bot.on('channel_post', async ctx => {
           } else {
             await ctx.reply(`Processing started. Points: ${r.points}`);
           }
+        }
       } else if (p.mode === 'createvideo') {
         p.photo = dest;
         await ctx.reply('Now send base video.');
