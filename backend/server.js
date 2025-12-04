@@ -11,7 +11,7 @@ const ffprobePath = require('ffprobe-static');
 const https = require('https');
 const querystring = require('querystring');
 if (ffmpegPath) {
-scm-history-item:c%3A%5CUsers%5CHP%5CDocuments%5Ctrae_projects%5Ctelegram%5Ctelegram?%7B%22repositoryId%22%3A%22scm0%22%2C%22historyItemId%22%3A%22c56cc12fed27ff10b377bce56c04d0193e83a698%22%2C%22historyItemParentId%22%3A%226fb22f5ffbcbb728c00469344cd1315276d77ff7%22%2C%22historyItemDisplayId%22%3A%22c56cc12%22%7D  ffmpeg.setFfmpegPath(ffmpegPath);
+  ffmpeg.setFfmpegPath(ffmpegPath);
 }
 if (ffprobePath && ffprobePath.path) {
   ffmpeg.setFfprobePath(ffprobePath.path);
