@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 console.log('Server script started');
 try { console.log('Stripe key length:', (process.env.STRIPE_SECRET_KEY || '').length); } catch (_) {}
 const fs = require('fs');
@@ -558,6 +558,18 @@ bot.start(async ctx => {
       saveData(data);
     }
   }
+  if (payload === 'faceswap') {
+    pending[String(ctx.from.id)] = { mode: 'faceswap', swap: null, target: null };
+    try { await ctx.reply('Video Face Swap: Send a swap photo first, then a target video trimmed to the length you want. Cost: 3 points per second.'); } catch (_) {}
+  }
+  if (payload === 'imageswap') {
+    pending[String(ctx.from.id)] = { mode: 'imageswap', swap: null, target: null };
+    try { await ctx.reply('Image Face Swap: Send a swap photo first, then a target photo. Cost: 9 points.'); } catch (_) {}
+  }
+  if (payload === 'createvideo') {
+    pending[String(ctx.from.id)] = { mode: 'createvideo', photo: null, video: null };
+    try { await ctx.reply('Create Video: Send overlay photo, then base video. Cost: 10 points (10 seconds @ 1 point/sec).'); } catch (_) {}
+  }
   const referral_link = `/?ref=${u.id}`;
   const botUsername = process.env.BOT_USERNAME || '';
   const promo_link = botUsername ? `https://t.me/${botUsername}?start=promo_${u.id}` : '';
@@ -859,6 +871,19 @@ bot.action('faceswap', async ctx => {
   await ctx.answerCbQuery();
   const isChannel = (ctx.chat && ctx.chat.type) === 'channel';
   if (isChannel) {
+    try {
+      const chatId = String(ctx.chat.id);
+      const member = await ctx.telegram.getChatMember(chatId, ctx.from.id);
+      const can = member && (member.status === 'creator' || member.status === 'administrator');
+      if (!can) {
+        const u = process.env.BOT_USERNAME || '';
+        const link = u ? `https://t.me/${u}?start=faceswap` : '';
+        if (link) { try { await ctx.reply(`Start in private chat: ${link}`); } catch (_) {} }
+        return;
+      }
+    } catch (_) {}
+  }
+  if (isChannel) {
     pendingChannel[String(ctx.chat.id)] = { mode: 'faceswap', swap: null, target: null };
   } else {
     pending[String(ctx.from.id)] = { mode: 'faceswap', swap: null, target: null };
@@ -879,6 +904,19 @@ bot.command('imageswap', async ctx => {
 bot.action('imageswap', async ctx => {
   await ctx.answerCbQuery();
   const isChannel = (ctx.chat && ctx.chat.type) === 'channel';
+  if (isChannel) {
+    try {
+      const chatId = String(ctx.chat.id);
+      const member = await ctx.telegram.getChatMember(chatId, ctx.from.id);
+      const can = member && (member.status === 'creator' || member.status === 'administrator');
+      if (!can) {
+        const u = process.env.BOT_USERNAME || '';
+        const link = u ? `https://t.me/${u}?start=imageswap` : '';
+        if (link) { try { await ctx.reply(`Start in private chat: ${link}`); } catch (_) {} }
+        return;
+      }
+    } catch (_) {}
+  }
   if (isChannel) {
     pendingChannel[String(ctx.chat.id)] = { mode: 'imageswap', swap: null, target: null };
   } else {
