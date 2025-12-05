@@ -29,7 +29,7 @@ const app = express();
 const uploadsDir = path.join(__dirname, 'uploads');
 const outputsDir = path.join(__dirname, 'outputs');
 const dataFile = path.join(__dirname, 'data.json');
-const PRICING = [
+let PRICING = [
   { id: 'p60', points: 60, usd: 3.09, stars: 150, tierBonus: 0.0 },
   { id: 'p120', points: 120, usd: 5.09, stars: 250, tierBonus: 0.02 },
   { id: 'p300', points: 300, usd: 9.99, stars: 500, tierBonus: 0.05 },
@@ -37,6 +37,17 @@ const PRICING = [
   { id: 'p1500', points: 1500, usd: 29.99, stars: 1500, tierBonus: 0.10 },
   { id: 'p7500', points: 7500, usd: 99.0, stars: 5000, tierBonus: 0.12 },
 ];
+
+try {
+  const pricingFile = path.join(__dirname, 'pricing.json');
+  const raw = fs.readFileSync(pricingFile, 'utf8');
+  const parsed = JSON.parse(raw);
+  if (Array.isArray(parsed) && parsed.length) {
+    PRICING = parsed
+      .filter(x => x && x.id && typeof x.points === 'number' && typeof x.usd === 'number')
+      .map(x => ({ id: String(x.id), points: Number(x.points), usd: Number(x.usd), stars: Number(x.stars || 0), tierBonus: Number(x.tierBonus || 0) }));
+  }
+} catch (_) {}
 
 function normalizePublicBase(value) {
   if (!value) return '';
@@ -69,6 +80,16 @@ function computeTierPayout(tier, user) {
   const loyaltyBonus = tier.tierBonus || 0;
   const total = Math.floor(tier.points * (1 + firstBonus + loyaltyBonus));
   return { total, firstBonus, loyaltyBonus };
+}
+
+function isFreeUserId(id) {
+  const fEnv = String(process.env.TEST_MODE || process.env.FREE_MODE || '').toLowerCase();
+  if (fEnv === '1' || fEnv === 'true' || fEnv === 'yes') return true;
+  const list = String(process.env.FREE_TEST_USER_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (id && list.includes(String(id))) return true;
+  const data = loadData();
+  const u = id ? data.users[String(id)] : null;
+  return !!(u && u.free === true);
 }
 try {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -308,7 +329,7 @@ app.post('/faceswap', upload.fields([{ name: 'photo' }, { name: 'video' }]), asy
   const data = loadData();
   const u = userId ? data.users[userId] : null;
   if (!u) return res.status(400).json({ error: 'missing user' });
-  let cost = 3;
+  let cost = 9;
   if (videoPath) {
     try {
       const info = await new Promise((resolve, reject) => {
@@ -322,9 +343,11 @@ app.post('/faceswap', upload.fields([{ name: 'photo' }, { name: 'video' }]), asy
       return res.status(500).json({ error: 'duration error' });
     }
   }
-  if ((u.points || 0) < cost) return res.status(402).json({ error: 'not enough points', required: cost, points: u.points });
-  u.points -= cost;
-  saveData(data);
+  if (!isFreeUserId(userId)) {
+    if ((u.points || 0) < cost) return res.status(402).json({ error: 'not enough points', required: cost, points: u.points });
+    u.points -= cost;
+    saveData(data);
+  }
   try {
     if (!PUBLIC_BASE) return res.status(500).json({ error: PUBLIC_BASE_ERROR || 'missing PUBLIC_URL/PUBLIC_ORIGIN' });
     const swapUrl = `${PUBLIC_BASE}/uploads/${path.basename(photoPath)}`;
@@ -348,8 +371,17 @@ app.post('/faceswap', upload.fields([{ name: 'photo' }, { name: 'video' }]), asy
 app.post('/create-video', upload.fields([{ name: 'photo' }, { name: 'video' }]), (req, res) => {
   const photoPath = req.files.photo[0].path;
   const videoPath = req.files.video[0].path;
+  const userId = req.body.userId;
+  const data = loadData();
+  const u = userId ? data.users[userId] : null;
+  if (!u) return res.status(400).json({ error: 'missing user' });
+  const cost = 10;
+  if (!isFreeUserId(userId) && (u.points || 0) < cost) return res.status(402).json({ error: 'not enough points', required: cost, points: u.points });
+  if (!isFreeUserId(userId)) {
+    u.points = (u.points || 0) - cost;
+    saveData(data);
+  }
   const outputPath = path.join(outputsDir, `short-${Date.now()}.mp4`);
-
   ffmpeg(videoPath)
     .setDuration(10)
     .addInput(photoPath)
@@ -357,7 +389,7 @@ app.post('/create-video', upload.fields([{ name: 'photo' }, { name: 'video' }]),
     .save(outputPath)
     .on('end', () => {
       const publicUrl = `/outputs/${path.basename(outputPath)}`;
-      res.json({ url: publicUrl });
+      res.json({ url: publicUrl, points: u.points });
     })
     .on('error', (err) => {
       res.status(500).json({ error: err.message });
@@ -493,9 +525,11 @@ async function runFaceswap(u, photoPath, videoPath, chatId) {
   }
   const data = loadData();
   const user = data.users[u.id];
-  if ((user.points || 0) < cost) return { error: 'not enough points', required: cost, points: user.points };
-  user.points -= cost;
-  saveData(data);
+  if (!isFreeUserId(u.id)) {
+    if ((user.points || 0) < cost) return { error: 'not enough points', required: cost, points: user.points };
+    user.points -= cost;
+    saveData(data);
+  }
   if (!PUBLIC_BASE) return { error: PUBLIC_BASE_ERROR || 'Missing PUBLIC_URL/PUBLIC_ORIGIN', required: 0, points: user.points };
   const swapUrl = `${PUBLIC_BASE}/uploads/${path.basename(photoPath)}`;
   const targetUrl = `${PUBLIC_BASE}/uploads/${path.basename(videoPath || photoPath)}`;
@@ -517,9 +551,11 @@ async function runFaceswapImage(u, swapPhotoPath, targetPhotoPath, chatId) {
   const cost = 9;
   const data = loadData();
   const user = data.users[u.id];
-  if ((user.points || 0) < cost) return { error: 'not enough points', required: cost, points: user.points };
-  user.points -= cost;
-  saveData(data);
+  if (!isFreeUserId(u.id)) {
+    if ((user.points || 0) < cost) return { error: 'not enough points', required: cost, points: user.points };
+    user.points -= cost;
+    saveData(data);
+  }
   const baseRaw = (process.env.PUBLIC_URL || process.env.PUBLIC_ORIGIN || '');
   const base = String(baseRaw).trim().replace(/^['"`]+|['"`]+$/g, '');
   const swapUrl = base ? `${base}/uploads/${path.basename(swapPhotoPath)}` : '';
@@ -1048,16 +1084,18 @@ bot.on('video', async ctx => {
         const createSeconds = 10;
         const createRate = 1;
         const cost = createSeconds * createRate;
-        if ((user.points || 0) < cost) {
+        if (!isFreeUserId(pid) && (user.points || 0) < cost) {
           const kb = Markup.inlineKeyboard([
             [Markup.button.callback('Buy Points', 'buy')],
             [Markup.button.callback('Main Menu', 'menu')]
           ]);
           return await ctx.reply(`Not enough points. Required: ${cost}, Your Points: ${user.points}`, kb);
         }
-        user.points = (user.points || 0) - cost;
-        saveData(data);
-        await ctx.reply(`Processing started. Cost: ${cost} points. Remaining: ${user.points}`);
+        if (!isFreeUserId(pid)) {
+          user.points = (user.points || 0) - cost;
+          saveData(data);
+        }
+        await ctx.reply(`Processing started. Cost: ${isFreeUserId(pid) ? 0 : cost} points. Remaining: ${user.points}`);
         const outputPath = path.join(outputsDir, `short-${Date.now()}.mp4`);
         ffmpeg(p.video)
           .setDuration(10)
@@ -1234,7 +1272,7 @@ bot.on('channel_post', async ctx => {
           const createSeconds = 10;
           const createRate = 1;
           const cost = createSeconds * createRate;
-          if ((user.points || 0) < cost) {
+          if (!isFreeUserId(uid) && (user.points || 0) < cost) {
             delete pendingChannel[chatId];
             const kb = Markup.inlineKeyboard([
               [Markup.button.callback('Buy Points', 'buy')],
@@ -1242,9 +1280,11 @@ bot.on('channel_post', async ctx => {
             ]);
             return await ctx.reply(`Not enough points. Required: ${cost}, Your Points: ${user.points}`, kb);
           }
-          user.points = (user.points || 0) - cost;
-          saveData(data);
-          await ctx.reply(`Processing started. Cost: ${cost} points. Remaining: ${user.points}`);
+          if (!isFreeUserId(uid)) {
+            user.points = (user.points || 0) - cost;
+            saveData(data);
+          }
+          await ctx.reply(`Processing started. Cost: ${isFreeUserId(uid) ? 0 : cost} points. Remaining: ${user.points}`);
           const outputPath = path.join(outputsDir, `short-${Date.now()}.mp4`);
           ffmpeg(p.video)
             .setDuration(10)
@@ -1465,6 +1505,19 @@ bot.command('promote', async ctx => {
     [Markup.button.callback('Main Menu', 'menu')]
   ]);
   await ctx.reply('Share these links to promote. Purchases via your links credit you 20% and add promo counts.', kb);
+});
+
+bot.command('free', async ctx => {
+  const owner = String(process.env.OWNER_ID || '');
+  if (!owner || String(ctx.from.id) !== owner) return;
+  const parts = (ctx.message.text || '').split(' ').filter(Boolean);
+  const target = parts[1] ? String(parts[1]) : String(ctx.from.id);
+  const data = loadData();
+  const u = data.users[target] || { id: target, points: 9 };
+  data.users[target] = u;
+  u.free = true;
+  saveData(data);
+  await ctx.reply(`Free enabled for ${target}`);
 });
 
 bot.action('promote', async ctx => {
