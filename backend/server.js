@@ -21,7 +21,7 @@ let stripe = null;
 if (stripeSecretKey) {
   stripe = require('stripe')(stripeSecretKey);
 } else {
-  console.warn('Missing STRIPE_SECRET_KEY. Stripe payments disabled until configured.');
+  try { console.warn('Missing STRIPE_SECRET_KEY. Stripe payments disabled until configured.'); } catch (_) {}
 }
 console.log('Env', { BOT_TOKEN: !!process.env.BOT_TOKEN, PUBLIC_URL: !!process.env.PUBLIC_URL, PUBLIC_ORIGIN: !!process.env.PUBLIC_ORIGIN, CHANNEL_ID: process.env.CHANNEL_ID ? process.env.CHANNEL_ID : '' });
 
