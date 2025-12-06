@@ -671,14 +671,21 @@ bot.action('leaderboard', async ctx => {
 bot.action('buy', async ctx => {
   try { await ctx.answerCbQuery('Opening packages…'); } catch (_) {}
   if (!stripe) return toast(ctx, 'Stripe not configured. Add STRIPE_SECRET_KEY to enable payments.', { alert: true });
-  if (!(await ensureChannelCanPost(ctx, 'show the packages'))) return;
   const id = ctx.from ? String(ctx.from.id) : null;
   const viewer = id ? getOrCreateUser(id) : null;
   const rows = PRICING.map(t => {
     return [Markup.button.callback(`${t.points} pts · $${t.usd}`, `buy:${t.id}`)];
   });
   try {
-    await ctx.reply('Select a package:', Markup.inlineKeyboard(rows));
+    const canPost = await ensureChannelCanPost(ctx, 'show the packages');
+    if (canPost) {
+      await ctx.reply('Select a package:', Markup.inlineKeyboard(rows));
+    } else if (id) {
+      await bot.telegram.sendMessage(id, 'Select a package:', { reply_markup: Markup.inlineKeyboard(rows).reply_markup });
+      try { await toast(ctx, 'Sent payment packages to you in private chat'); } catch (_) {}
+    } else {
+      await ctx.reply('Select a package:', Markup.inlineKeyboard(rows));
+    }
   } catch (_) {}
 });
 
@@ -686,14 +693,12 @@ bot.action(/buy:(.+)/, async ctx => {
   try { await ctx.answerCbQuery('Preparing checkout…'); } catch (_) {}
   try {
     if (!stripe) { await toast(ctx, 'Stripe is not configured. Set STRIPE_SECRET_KEY & STRIPE_WEBHOOK_SECRET.', { alert: true }); return; }
-    if (!(await ensureChannelCanPost(ctx, 'post the payment link'))) return;
     const tierId = ctx.match[1];
     const id = String(ctx.from.id);
     const u = getOrCreateUser(id);
     const tier = PRICING.find(t => t.id === tierId);
     if (!tier) return ctx.reply('Not found');
-    const originRaw = (process.env.PUBLIC_URL || process.env.PUBLIC_ORIGIN || (process.env.BOT_USERNAME ? `https://t.me/${process.env.BOT_USERNAME}` : 'https://t.me'));
-    const origin = String(originRaw).trim().replace(/^['"`]+|['"`]+$/g, '');
+    const origin = computeOrigin(ctx.headers && ctx.headers.origin);
     const chatMeta = String(ctx.chat && ctx.chat.id);
     const chatId = String(ctx.chat && ctx.chat.id || '');
     let session;
@@ -718,7 +723,13 @@ bot.action(/buy:(.+)/, async ctx => {
       [Markup.button.callback('Main Menu', 'menu'), Markup.button.callback('Help', 'help')]
     ]);
     try {
-      await ctx.reply('Complete your purchase, then tap Confirm:', kb);
+      const canPost = await ensureChannelCanPost(ctx, 'post the payment link');
+      if (canPost) {
+        await ctx.reply('Complete your purchase, then tap Confirm:', kb);
+      } else {
+        await bot.telegram.sendMessage(id, 'Complete your purchase, then tap Confirm:', { reply_markup: kb.reply_markup });
+        try { await toast(ctx, 'Sent payment link to you in private chat'); } catch (_) {}
+      }
     } catch (_) {}
   } catch (e) {
     try { await ctx.reply(`Error: ${e.message}`); } catch (_) {}
