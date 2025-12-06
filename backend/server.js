@@ -80,14 +80,9 @@ function computeTierPayout(tier) {
   return { total };
 }
 
-function isFreeUserId(id) {
-  const fEnv = String(process.env.TEST_MODE || process.env.FREE_MODE || '').toLowerCase();
-  if (fEnv === '1' || fEnv === 'true' || fEnv === 'yes') return true;
-  const list = String(process.env.FREE_TEST_USER_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
-  if (id && list.includes(String(id))) return true;
-  const data = loadData();
-  const u = id ? data.users[String(id)] : null;
-  return !!(u && u.free === true);
+function computeOrigin(reqOrigin) {
+  const originRaw = (process.env.PUBLIC_URL || process.env.PUBLIC_ORIGIN || reqOrigin || (process.env.BOT_USERNAME ? `https://t.me/${process.env.BOT_USERNAME}` : 'https://t.me'));
+  return String(originRaw).trim().replace(/^['"`]+|['"`]+$/g, '');
 }
 try {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -250,8 +245,8 @@ app.post('/create-point-session', async (req, res) => {
         quantity: 1,
       }],
       mode: 'payment',
-      success_url: `${req.headers.origin}/?success=1&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${req.headers.origin}/?cancel=1`,
+      success_url: `${computeOrigin(req.headers.origin)}/?success=1&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${computeOrigin(req.headers.origin)}/?cancel=1`,
       metadata: { userId: String(userId), tierId },
     });
     res.json({ id: session.id });
@@ -266,9 +261,8 @@ app.post('/confirm-point-session', async (req, res) => {
   if (!sessionId) return res.status(400).json({ error: 'missing sessionId' });
   try {
     const session = await stripe.checkout.sessions.retrieve(sessionId);
-    if (!session || (session.payment_status !== 'paid' && session.status !== 'complete')) {
-      return res.status(402).json({ error: 'payment not completed' });
-    }
+    if (!session) return res.status(404).json({ error: 'session not found' });
+    if (session.payment_status !== 'paid' && session.status !== 'complete') return res.status(402).json({ error: 'payment not completed' });
     const data = loadData();
     if (data.purchases[sessionId]) {
       const userId = session.metadata && session.metadata.userId;
@@ -280,6 +274,10 @@ app.post('/confirm-point-session', async (req, res) => {
     const u = userId ? data.users[userId] : null;
     const tier = PRICING.find(t => t.id === tierId);
     if (!u || !tier) return res.status(404).json({ error: 'not found' });
+    const expected = Math.round(tier.usd * 100);
+    const paid = typeof session.amount_total === 'number' ? session.amount_total : null;
+    const currency = (session.currency || '').toLowerCase();
+    if (paid !== expected || currency !== 'usd') return res.status(400).json({ error: 'amount mismatch' });
     const addPoints = Math.floor(tier.points);
     u.points = (u.points || 0) + addPoints;
     u.has_recharged = true;
@@ -339,11 +337,9 @@ app.post('/faceswap', upload.fields([{ name: 'photo' }, { name: 'video' }]), asy
       return res.status(500).json({ error: 'duration error' });
     }
   }
-  if (!isFreeUserId(userId)) {
-    if ((u.points || 0) < cost) return res.status(402).json({ error: 'not enough points', required: cost, points: u.points });
-    u.points -= cost;
-    saveData(data);
-  }
+  if ((u.points || 0) < cost) return res.status(402).json({ error: 'not enough points', required: cost, points: u.points });
+  u.points -= cost;
+  saveData(data);
   try {
     if (!PUBLIC_BASE) return res.status(500).json({ error: PUBLIC_BASE_ERROR || 'missing PUBLIC_URL/PUBLIC_ORIGIN' });
     const swapUrl = `${PUBLIC_BASE}/uploads/${path.basename(photoPath)}`;
@@ -372,11 +368,9 @@ app.post('/create-video', upload.fields([{ name: 'photo' }, { name: 'video' }]),
   const u = userId ? data.users[userId] : null;
   if (!u) return res.status(400).json({ error: 'missing user' });
   const cost = 10;
-  if (!isFreeUserId(userId) && (u.points || 0) < cost) return res.status(402).json({ error: 'not enough points', required: cost, points: u.points });
-  if (!isFreeUserId(userId)) {
-    u.points = (u.points || 0) - cost;
-    saveData(data);
-  }
+  if ((u.points || 0) < cost) return res.status(402).json({ error: 'not enough points', required: cost, points: u.points });
+  u.points = (u.points || 0) - cost;
+  saveData(data);
   const outputPath = path.join(outputsDir, `short-${Date.now()}.mp4`);
   ffmpeg(videoPath)
     .setDuration(10)
@@ -521,11 +515,9 @@ async function runFaceswap(u, photoPath, videoPath, chatId) {
   }
   const data = loadData();
   const user = data.users[u.id];
-  if (!isFreeUserId(u.id)) {
-    if ((user.points || 0) < cost) return { error: 'not enough points', required: cost, points: user.points };
-    user.points -= cost;
-    saveData(data);
-  }
+  if ((user.points || 0) < cost) return { error: 'not enough points', required: cost, points: user.points };
+  user.points -= cost;
+  saveData(data);
   if (!PUBLIC_BASE) return { error: PUBLIC_BASE_ERROR || 'Missing PUBLIC_URL/PUBLIC_ORIGIN', required: 0, points: user.points };
   const swapUrl = `${PUBLIC_BASE}/uploads/${path.basename(photoPath)}`;
   const targetUrl = `${PUBLIC_BASE}/uploads/${path.basename(videoPath || photoPath)}`;
@@ -547,11 +539,9 @@ async function runFaceswapImage(u, swapPhotoPath, targetPhotoPath, chatId) {
   const cost = 9;
   const data = loadData();
   const user = data.users[u.id];
-  if (!isFreeUserId(u.id)) {
-    if ((user.points || 0) < cost) return { error: 'not enough points', required: cost, points: user.points };
-    user.points -= cost;
-    saveData(data);
-  }
+  if ((user.points || 0) < cost) return { error: 'not enough points', required: cost, points: user.points };
+  user.points -= cost;
+  saveData(data);
   const baseRaw = (process.env.PUBLIC_URL || process.env.PUBLIC_ORIGIN || '');
   const base = String(baseRaw).trim().replace(/^['"`]+|['"`]+$/g, '');
   const swapUrl = base ? `${base}/uploads/${path.basename(swapPhotoPath)}` : '';
@@ -741,7 +731,10 @@ bot.action(/confirm:(.+)/, async ctx => {
   await ctx.answerCbQuery();
   const sessionId = ctx.match[1];
   const r = await stripe.checkout.sessions.retrieve(sessionId);
-  if (!r || (r.payment_status !== 'paid' && r.status !== 'complete')) {
+  if (!r) {
+    try { return await ctx.reply('Payment session not found'); } catch (_) { return; }
+  }
+  if (r.payment_status !== 'paid' && r.status !== 'complete') {
     try { return await ctx.reply('Payment not completed'); } catch (_) { return; }
   }
   const data = loadData();
@@ -755,6 +748,10 @@ bot.action(/confirm:(.+)/, async ctx => {
   const u = uid ? data.users[uid] : null;
   const tier = PRICING.find(t => t.id === tierId);
   if (!u || !tier) { try { return await ctx.reply('Not found'); } catch (_) { return; } }
+  const expected = Math.round(tier.usd * 100);
+  const paid = typeof r.amount_total === 'number' ? r.amount_total : null;
+  const currency = (r.currency || '').toLowerCase();
+  if (paid !== expected || currency !== 'usd') { try { return await ctx.reply('Payment amount mismatch'); } catch (_) { return; } }
   const addPoints = Math.floor(tier.points);
   u.points = (u.points || 0) + addPoints;
   u.has_recharged = true;
@@ -767,7 +764,7 @@ bot.action(/confirm:(.+)/, async ctx => {
   }
   data.purchases[sessionId] = true;
   saveData(data);
-  try { await ctx.reply(`Credited ${addPoints} points. Balance: ${u.points}`); } catch (_) {}
+  try { await ctx.reply(`Payment confirmed. Credited ${addPoints} points. Balance: ${u.points}`); } catch (_) {}
 });
 
 bot.command('confirm', async ctx => {
@@ -776,7 +773,8 @@ bot.command('confirm', async ctx => {
   const sessionId = parts[1];
   if (!sessionId) return ctx.reply('Provide session id');
   const r = await stripe.checkout.sessions.retrieve(sessionId);
-  if (!r || (r.payment_status !== 'paid' && r.status !== 'complete')) return ctx.reply('Payment not completed');
+  if (!r) return ctx.reply('Payment session not found');
+  if (r.payment_status !== 'paid' && r.status !== 'complete') return ctx.reply('Payment not completed');
   const data = loadData();
   if (data.purchases[sessionId]) {
     const uid = r.metadata && r.metadata.userId;
@@ -788,6 +786,10 @@ bot.command('confirm', async ctx => {
   const u = uid ? data.users[uid] : null;
   const tier = PRICING.find(t => t.id === tierId);
   if (!u || !tier) return ctx.reply('Not found');
+  const expected = Math.round(tier.usd * 100);
+  const paid = typeof r.amount_total === 'number' ? r.amount_total : null;
+  const currency = (r.currency || '').toLowerCase();
+  if (paid !== expected || currency !== 'usd') return ctx.reply('Payment amount mismatch');
   const addPoints = Math.floor(tier.points);
   u.points = (u.points || 0) + addPoints;
   u.has_recharged = true;
@@ -1072,18 +1074,16 @@ bot.on('video', async ctx => {
         const createSeconds = 10;
         const createRate = 1;
         const cost = createSeconds * createRate;
-        if (!isFreeUserId(pid) && (user.points || 0) < cost) {
+        if ((user.points || 0) < cost) {
           const kb = Markup.inlineKeyboard([
             [Markup.button.callback('Buy Points', 'buy')],
             [Markup.button.callback('Main Menu', 'menu')]
           ]);
           return await ctx.reply(`Not enough points. Required: ${cost}, Your Points: ${user.points}`, kb);
         }
-        if (!isFreeUserId(pid)) {
-          user.points = (user.points || 0) - cost;
-          saveData(data);
-        }
-        await ctx.reply(`Processing started. Cost: ${isFreeUserId(pid) ? 0 : cost} points. Remaining: ${user.points}`);
+        user.points = (user.points || 0) - cost;
+        saveData(data);
+        await ctx.reply(`Processing started. Cost: ${cost} points. Remaining: ${user.points}`);
         const outputPath = path.join(outputsDir, `short-${Date.now()}.mp4`);
         ffmpeg(p.video)
           .setDuration(10)
@@ -1260,7 +1260,7 @@ bot.on('channel_post', async ctx => {
           const createSeconds = 10;
           const createRate = 1;
           const cost = createSeconds * createRate;
-          if (!isFreeUserId(uid) && (user.points || 0) < cost) {
+          if ((user.points || 0) < cost) {
             delete pendingChannel[chatId];
             const kb = Markup.inlineKeyboard([
               [Markup.button.callback('Buy Points', 'buy')],
@@ -1268,11 +1268,9 @@ bot.on('channel_post', async ctx => {
             ]);
             return await ctx.reply(`Not enough points. Required: ${cost}, Your Points: ${user.points}`, kb);
           }
-          if (!isFreeUserId(uid)) {
-            user.points = (user.points || 0) - cost;
-            saveData(data);
-          }
-          await ctx.reply(`Processing started. Cost: ${isFreeUserId(uid) ? 0 : cost} points. Remaining: ${user.points}`);
+          user.points = (user.points || 0) - cost;
+          saveData(data);
+          await ctx.reply(`Processing started. Cost: ${cost} points. Remaining: ${user.points}`);
           const outputPath = path.join(outputsDir, `short-${Date.now()}.mp4`);
           ffmpeg(p.video)
             .setDuration(10)
