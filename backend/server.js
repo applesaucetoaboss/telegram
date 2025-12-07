@@ -1293,7 +1293,7 @@ if (process.env.BOT_TOKEN) {
   global.__botLaunchMode = 'none';
   if (shouldForcePolling) {
     bot.telegram.deleteWebhook().catch(() => {});
-    bot.launch().then(() => { global.__botLaunchMode = 'polling'; console.log('Bot launched (forced polling)'); bot.telegram.getWebhookInfo().then(info => console.log('Webhook info', info)).catch(err => console.error('Webhook info err', err)); }).catch(err => console.error('Bot launch error', err));
+    bot.launch().then(async () => { global.__botLaunchMode = 'polling'; console.log('Bot launched (forced polling)'); try { await seedChannelMenu(); } catch (_) {} bot.telegram.getWebhookInfo().then(info => console.log('Webhook info', info)).catch(err => console.error('Webhook info err', err)); }).catch(err => console.error('Bot launch error', err));
   } else if ((process.env.PUBLIC_URL || process.env.PUBLIC_ORIGIN)) {
     try {
       const pathHook = (process.env.TELEGRAM_WEBHOOK_PATH || '/telegram/webhook');
@@ -1314,15 +1314,15 @@ if (process.env.BOT_TOKEN) {
         }).catch(e => {
           console.error('Webhook set error', e);
           bot.telegram.deleteWebhook().catch(() => {});
-          bot.launch().then(() => { global.__botLaunchMode = 'polling'; console.log('Bot launched (fallback)'); bot.telegram.getWebhookInfo().then(info => console.log('Webhook info', info)).catch(err => console.error('Webhook info err', err)); }).catch(err => console.error('Bot launch error', err));
+          bot.launch().then(async () => { global.__botLaunchMode = 'polling'; console.log('Bot launched (fallback)'); try { await seedChannelMenu(); } catch (_) {} bot.telegram.getWebhookInfo().then(info => console.log('Webhook info', info)).catch(err => console.error('Webhook info err', err)); }).catch(err => console.error('Bot launch error', err));
         });
       }
     } catch (e) {
       console.error('Webhook init error', e);
-      bot.launch().then(() => { global.__botLaunchMode = 'polling'; console.log('Bot launched (fallback)'); bot.telegram.getWebhookInfo().then(info => console.log('Webhook info', info)).catch(err => console.error('Webhook info err', err)); }).catch(err => console.error('Bot launch error', err));
+      bot.launch().then(async () => { global.__botLaunchMode = 'polling'; console.log('Bot launched (fallback)'); try { await seedChannelMenu(); } catch (_) {} bot.telegram.getWebhookInfo().then(info => console.log('Webhook info', info)).catch(err => console.error('Webhook info err', err)); }).catch(err => console.error('Bot launch error', err));
     }
   } else {
-    bot.launch().then(() => { global.__botLaunchMode = 'polling'; console.log('Bot launched'); bot.telegram.getWebhookInfo().then(info => console.log('Webhook info', info)).catch(err => console.error('Webhook info err', err)); }).catch(e => console.error('Bot launch error', e));
+    bot.launch().then(async () => { global.__botLaunchMode = 'polling'; console.log('Bot launched'); try { await seedChannelMenu(); } catch (_) {} bot.telegram.getWebhookInfo().then(info => console.log('Webhook info', info)).catch(err => console.error('Webhook info err', err)); }).catch(e => console.error('Bot launch error', e));
   }
 } else {
   console.error('Missing BOT_TOKEN');
@@ -1537,4 +1537,23 @@ async function sendInChannel(ctx, text, options) {
   const ch = getPrimaryChannelId();
   if (!ch) return null;
   try { return await bot.telegram.sendMessage(ch, text, options || {}); } catch (_) { return null; }
+}
+
+async function seedChannelMenu() {
+  const ch = getPrimaryChannelId();
+  if (!ch) return;
+  try {
+    const id = '0';
+    const u = getOrCreateUser(id);
+    const referral_link = `/?ref=${u.id}`;
+    const botUsername = process.env.BOT_USERNAME || '';
+    const promo_link = botUsername ? `https://t.me/${botUsername}?start=promo_${u.id}` : '';
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('Points', 'points'), Markup.button.callback('Check-In', 'checkin')],
+      [Markup.button.callback('Buy Points', 'buy'), Markup.button.callback('Image Face Swap', 'imageswap')],
+      [Markup.button.callback('Video Face Swap', 'faceswap'), Markup.button.callback('Create Video', 'createvideo')],
+      [Markup.button.callback('Promote', 'promote'), Markup.button.callback('Help', 'help')]
+    ]);
+    await bot.telegram.sendMessage(ch, `Main Menu\nPoints: ${u.points}\nInvite: ${referral_link}${promo_link ? '\nPromo: ' + promo_link : ''}`, { reply_markup: keyboard.reply_markup });
+  } catch (e) { try { console.error('seedChannelMenu error', e); } catch (_) {} }
 }
