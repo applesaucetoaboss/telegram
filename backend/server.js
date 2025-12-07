@@ -36,6 +36,30 @@ function formatUSD(amount) {
   const n = Number(amount || 0);
   return `$${n.toFixed(2)}`;
 }
+const SUPPORTED_CURRENCIES = ['usd','eur','gbp','cad','aud','jpy'];
+const CURRENCY_DECIMALS = { usd: 2, eur: 2, gbp: 2, cad: 2, aud: 2, jpy: 0 };
+async function fetchUsdRate(to) {
+  return await new Promise((resolve) => {
+    try {
+      const symbol = String(to || '').toUpperCase();
+      const pathFx = `/latest?base=USD&symbols=${encodeURIComponent(symbol)}`;
+      const req = https.request({ hostname: 'api.exchangerate.host', path: pathFx, method: 'GET' }, res => {
+        let buf=''; res.on('data', c => buf+=c); res.on('end', () => {
+          try { const j = JSON.parse(buf); const rate = j && j.rates && j.rates[symbol]; resolve(typeof rate === 'number' ? rate : 1); }
+          catch (_) { resolve(1); }
+        });
+      });
+      req.on('error', () => resolve(1));
+      req.end();
+    } catch (_) { resolve(1); }
+  });
+}
+function toMinorUnits(amount, currency, rate) {
+  const dec = CURRENCY_DECIMALS[currency] ?? 2;
+  const val = Number(amount) * Number(rate || 1);
+  if (dec === 0) return Math.round(val);
+  return Math.round(val * Math.pow(10, dec));
+}
 let PRICING = [
   { id: 'p60', points: 60, usd: 3.09, stars: 150, tierBonus: 0.0 },
   { id: 'p120', points: 120, usd: 5.09, stars: 250, tierBonus: 0.02 },
@@ -114,6 +138,57 @@ app.get('/', async (req, res) => {
     res.json({ ok: true, mode: global.__botLaunchMode || 'none', webhook_info: info });
   } catch (e) {
     res.json({ ok: true, mode: global.__botLaunchMode || 'none' });
+  }
+});
+
+bot.action(/curr:(\w+):(.+)/, async ctx => {
+  try { await ctx.answerCbQuery('Preparing checkout…'); } catch (_) {}
+  try {
+    if (!stripe) { await toast(ctx, 'Payments are currently unavailable.', { alert: true }); return; }
+    const currency = String(ctx.match[1] || 'usd').toLowerCase();
+    const tierId = ctx.match[2];
+    const id = String(ctx.from.id);
+    const u = getOrCreateUser(id);
+    const tier = PRICING.find(t => t.id === tierId);
+    if (!tier) return sendInChannel(ctx, 'Not found');
+    const origin = PUBLIC_BASE || computeOrigin(null) || 'https://stripe.com';
+    const chatMeta = String(ctx.chat && ctx.chat.id);
+    const rate = await fetchUsdRate(currency);
+    const unit_amount = toMinorUnits(tier.usd, currency, rate);
+    let session;
+    try {
+      session = await stripe.checkout.sessions.create({
+        payment_method_types: ['card'],
+        line_items: [{ price_data: { currency, product_data: { name: `${tier.points} Points` }, unit_amount }, quantity: 1 }],
+        mode: 'payment',
+        locale: 'en',
+        success_url: `${origin}/?success=1&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${origin}/?cancel=1`,
+        metadata: { userId: String(id), tierId, chatId: chatMeta, promoterId: String(u.promoter_id || ''), currency }
+      });
+      try { await ctx.answerCbQuery('Checkout ready'); } catch (_) {}
+    } catch (e) {
+      try { console.error('Stripe session create error', { msg: e && e.message, code: e && e.code, type: e && e.type }); } catch (_) {}
+      try { await sendInChannel(ctx, `Payment error: ${e && e.message ? e.message : 'Checkout failed'}`); } catch (_) {}
+      return;
+    }
+    const kb = Markup.inlineKeyboard([
+      [Markup.button.url('Make Payment', session.url || 'https://stripe.com')],
+      [Markup.button.callback('Confirm Payment', `confirm:${session.id}`)],
+      [Markup.button.callback('Main Menu', 'menu'), Markup.button.callback('Help', 'help')]
+    ]);
+    try {
+      try { console.log('buy.checkout', { chat: ctx.chat && ctx.chat.id, type: ctx.chat && ctx.chat.type, from: id, tier: tierId, session: session && session.id, url: session && session.url, currency, rate, unit_amount }); } catch (_) {}
+      const posted = await sendInChannel(ctx, `Price: ${formatUSD(tier.usd)} (~${currency.toUpperCase()} @ rate ${rate.toFixed ? rate.toFixed(4) : rate})\nAccepted: Visa · Mastercard · AmEx\nCurrency: ${currency.toUpperCase()}\nComplete your purchase, then tap Confirm:`, { reply_markup: kb.reply_markup });
+      if (!posted) {
+        const ch = getPrimaryChannelId();
+        if (ch) {
+          try { await bot.telegram.sendMessage(ch, `Price: ${formatUSD(tier.usd)}\nCurrency: ${currency.toUpperCase()}\nComplete your purchase, then tap Confirm:`, { reply_markup: kb.reply_markup }); } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  } catch (e) {
+    try { await sendInChannel(ctx, `Error: ${e && e.message ? e.message : 'Unknown error'}`); } catch (_) {}
   }
 });
 
@@ -771,35 +846,12 @@ bot.action(/buy:(.+)/, async ctx => {
     const origin = PUBLIC_BASE || computeOrigin(null) || 'https://stripe.com';
     const chatMeta = String(ctx.chat && ctx.chat.id);
     const chatId = String(ctx.chat && ctx.chat.id || '');
-    let session;
-    try {
-      session = await stripe.checkout.sessions.create({
-        payment_method_types: ['card'],
-      line_items: [{ price_data: { currency: 'usd', product_data: { name: `${tier.points} Points` }, unit_amount: Math.round(tier.usd * 100) }, quantity: 1 }],
-      mode: 'payment',
-      locale: 'en',
-      success_url: `${origin}/?success=1&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${origin}/?cancel=1`,
-      metadata: { userId: String(id), tierId, chatId: chatMeta, promoterId: String(u.promoter_id || ''), currency: 'usd' }
-    });
-      try { await ctx.answerCbQuery('Checkout ready'); } catch (_) {}
-    } catch (e) {
-      try { console.error('Stripe session create error', { msg: e && e.message, code: e && e.code, type: e && e.type }); } catch (_) {}
-      try { await sendInChannel(ctx, `Payment error: ${e && e.message ? e.message : 'Checkout failed'}`); } catch (_) {}
-      return;
-    }
-  const kb = Markup.inlineKeyboard([
-    [Markup.button.url(`Make Payment`, session.url || 'https://stripe.com')],
-    [Markup.button.callback('Confirm Payment', `confirm:${session.id}`)],
-    [Markup.button.callback('Main Menu', 'menu'), Markup.button.callback('Help', 'help')]
-  ]);
-  try {
-    try { console.log('buy.checkout', { chat: ctx.chat && ctx.chat.id, type: ctx.chat && ctx.chat.type, from: id, tier: tierId, session: session && session.id, url: session && session.url }); } catch (_) {}
-    const posted = await sendInChannel(ctx, `Price: ${formatUSD(tier.usd)}\nAccepted: Visa · Mastercard · AmEx\nCurrency: USD\nComplete your purchase, then tap Confirm:`, { reply_markup: kb.reply_markup });
-    if (!posted) {
-      await sendInChannel(ctx, `Make Payment: ${session.url}\nThen run /confirm ${session.id}`);
-    }
-  } catch (_) {}
+    const currencyRows = [
+      [Markup.button.callback('USD', `curr:usd:${tierId}`), Markup.button.callback('EUR', `curr:eur:${tierId}`)],
+      [Markup.button.callback('GBP', `curr:gbp:${tierId}`), Markup.button.callback('More', `curr:cad:${tierId}`)],
+      [Markup.button.callback('Back', 'buy')]
+    ];
+    await sendInChannel(ctx, `Price: ${formatUSD(tier.usd)}\nChoose currency:`, { reply_markup: Markup.inlineKeyboard(currencyRows).reply_markup });
   } catch (e) {
     try { await sendInChannel(ctx, `Error: ${e && e.message ? e.message : 'Unknown error'}`); } catch (_) {}
   }
@@ -1602,7 +1654,11 @@ function getPrimaryChannelId() {
 async function sendInChannel(ctx, text, options) {
   try {
     if (ctx && ctx.chat && (ctx.chat.type === 'channel' || ctx.chat.type === 'supergroup')) {
-      return await ctx.reply(text, options);
+      try { return await ctx.reply(text, options); } catch (e1) {
+        try { return await bot.telegram.sendMessage(String(ctx.chat.id), text, options || {}); } catch (e2) {
+          try { console.error('sendInChannel post failed in current chat', { chat: ctx.chat.id, error: e2 && e2.message }); } catch (_) {}
+        }
+      }
     }
   } catch (e) { try { console.error('sendInChannel reply error', { chat: ctx && ctx.chat && ctx.chat.id, type: ctx && ctx.chat && ctx.chat.type, error: e && e.message, code: e && e.code }); } catch (_) {} }
   const ch = getPrimaryChannelId();
