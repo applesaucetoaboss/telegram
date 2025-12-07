@@ -723,7 +723,7 @@ bot.action(/buy:(.+)/, async ctx => {
       try { await ctx.answerCbQuery('Checkout ready'); } catch (_) {}
     } catch (e) {
       try { console.error('Stripe session create error', e); } catch (_) {}
-      try { await ctx.reply(`Payment error: ${e.message}`); } catch (_) {}
+      try { await ctx.reply(`Payment error: ${e.message}`); } catch (_) { try { await bot.telegram.sendMessage(id, `Payment error: ${e.message}`); } catch (__) {} }
       return;
     }
     const kb = Markup.inlineKeyboard([
@@ -906,6 +906,7 @@ const pendingChannel = {};
 bot.command('faceswap', async ctx => {
   const isChannel = (ctx.chat && ctx.chat.type) === 'channel';
   pending[String(ctx.from.id)] = { mode: 'faceswap', swap: null, target: null, chatId: String(ctx.chat.id) };
+  if (isChannel) { pendingChannel[String(ctx.chat.id)] = { mode: 'faceswap', uid: String(ctx.from.id), swap: null, target: null }; }
   setUserContext(String(ctx.from.id), String(ctx.chat.id));
   await ctx.reply('Video Face Swap: Send a swap photo first, then a target video trimmed to the length you want. Cost: 3 points per second.');
 });
@@ -913,6 +914,7 @@ bot.command('faceswap', async ctx => {
 bot.action('faceswap', async ctx => {
   await ctx.answerCbQuery();
   pending[String(ctx.from.id)] = { mode: 'faceswap', swap: null, target: null, chatId: String(ctx.chat.id) };
+  if ((ctx.chat && ctx.chat.type) === 'channel') { pendingChannel[String(ctx.chat.id)] = { mode: 'faceswap', uid: String(ctx.from.id), swap: null, target: null }; }
   setUserContext(String(ctx.from.id), String(ctx.chat.id));
   try { await ctx.reply('Video Face Swap: Send a swap photo first, then a target video trimmed to the length you want. Cost: 3 points per second.'); } catch (_) {}
 });
@@ -920,6 +922,7 @@ bot.action('faceswap', async ctx => {
 bot.command('imageswap', async ctx => {
   const isChannel = (ctx.chat && ctx.chat.type) === 'channel';
   pending[String(ctx.from.id)] = { mode: 'imageswap', swap: null, target: null, chatId: String(ctx.chat.id) };
+  if (isChannel) { pendingChannel[String(ctx.chat.id)] = { mode: 'imageswap', uid: String(ctx.from.id), swap: null, target: null }; }
   setUserContext(String(ctx.from.id), String(ctx.chat.id));
   await ctx.reply('Image Face Swap: Send a swap photo first, then a target photo. Cost: 9 points.');
 });
@@ -927,6 +930,7 @@ bot.command('imageswap', async ctx => {
 bot.action('imageswap', async ctx => {
   await ctx.answerCbQuery();
   pending[String(ctx.from.id)] = { mode: 'imageswap', swap: null, target: null, chatId: String(ctx.chat.id) };
+  if ((ctx.chat && ctx.chat.type) === 'channel') { pendingChannel[String(ctx.chat.id)] = { mode: 'imageswap', uid: String(ctx.from.id), swap: null, target: null }; }
   setUserContext(String(ctx.from.id), String(ctx.chat.id));
   try { await ctx.reply('Image Face Swap: Send a swap photo first, then a target photo. Cost: 9 points.'); } catch (_) {}
 });
@@ -934,6 +938,7 @@ bot.action('imageswap', async ctx => {
 bot.action('createvideo', async ctx => {
   await ctx.answerCbQuery();
   pending[String(ctx.from.id)] = { mode: 'createvideo', photo: null, video: null, chatId: String(ctx.chat.id) };
+  if ((ctx.chat && ctx.chat.type) === 'channel') { pendingChannel[String(ctx.chat.id)] = { mode: 'createvideo', uid: String(ctx.from.id), photo: null, video: null }; }
   setUserContext(String(ctx.from.id), String(ctx.chat.id));
   try { await ctx.reply('Create Video: Send overlay photo, then base video. Cost: 10 points (10 seconds @ 1 point/sec).'); } catch (_) {}
 });
