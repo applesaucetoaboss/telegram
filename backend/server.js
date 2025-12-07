@@ -102,6 +102,15 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/outputs', express.static(outputsDir));
 app.use('/uploads', express.static(uploadsDir));
 
+app.get('/', async (req, res) => {
+  try {
+    const info = await bot.telegram.getWebhookInfo();
+    res.json({ ok: true, mode: global.__botLaunchMode || 'none', webhook_info: info });
+  } catch (e) {
+    res.json({ ok: true, mode: global.__botLaunchMode || 'none' });
+  }
+});
+
 function loadData() {
   try {
     const raw = fs.readFileSync(dataFile, 'utf8');
