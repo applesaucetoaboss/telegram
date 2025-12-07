@@ -1533,10 +1533,11 @@ function getPrimaryChannelId() {
 }
 
 async function sendInChannel(ctx, text, options) {
-  try { return await ctx.reply(text, options); } catch (_) {}
   const ch = getPrimaryChannelId();
-  if (!ch) return null;
-  try { return await bot.telegram.sendMessage(ch, text, options || {}); } catch (_) { return null; }
+  if (ch) {
+    try { return await bot.telegram.sendMessage(ch, text, options || {}); } catch (_) {}
+  }
+  try { return await ctx.reply(text, options); } catch (_) { return null; }
 }
 
 async function seedChannelMenu() {
