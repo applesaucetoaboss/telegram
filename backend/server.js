@@ -687,15 +687,7 @@ bot.action('buy', async ctx => {
     return [Markup.button.callback(`${t.points} pts · $${t.usd}`, `buy:${t.id}`)];
   });
   try {
-    const canPost = await ensureChannelCanPost(ctx, 'show the packages');
-    if (canPost) {
-      await ctx.reply('Select a package:', Markup.inlineKeyboard(rows));
-    } else if (id) {
-      await bot.telegram.sendMessage(id, 'Select a package:', { reply_markup: Markup.inlineKeyboard(rows).reply_markup });
-      try { await toast(ctx, 'Sent payment packages to you in private chat'); } catch (_) {}
-    } else {
-      await ctx.reply('Select a package:', Markup.inlineKeyboard(rows));
-    }
+    await ctx.reply('Select a package:', Markup.inlineKeyboard(rows));
   } catch (_) {}
 });
 
@@ -727,20 +719,14 @@ bot.action(/buy:(.+)/, async ctx => {
       try { await ctx.reply(`Payment error: ${e.message}`); } catch (_) { try { await bot.telegram.sendMessage(id, `Payment error: ${e.message}`); } catch (__) {} }
       return;
     }
-    const kb = Markup.inlineKeyboard([
-      [Markup.button.url(`Pay $${tier.usd}`, session.url || 'https://stripe.com')],
-      [Markup.button.callback('Confirm Payment', `confirm:${session.id}`)],
-      [Markup.button.callback('Main Menu', 'menu'), Markup.button.callback('Help', 'help')]
-    ]);
-    try {
-      const canPost = await ensureChannelCanPost(ctx, 'post the payment link');
-      if (canPost) {
-        await ctx.reply('Complete your purchase, then tap Confirm:', kb);
-      } else {
-        await bot.telegram.sendMessage(id, 'Complete your purchase, then tap Confirm:', { reply_markup: kb.reply_markup });
-        try { await toast(ctx, 'Sent payment link to you in private chat'); } catch (_) {}
-      }
-    } catch (_) {}
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.url(`Pay $${tier.usd}`, session.url || 'https://stripe.com')],
+    [Markup.button.callback('Confirm Payment', `confirm:${session.id}`)],
+    [Markup.button.callback('Main Menu', 'menu'), Markup.button.callback('Help', 'help')]
+  ]);
+  try {
+    await ctx.reply('Complete your purchase, then tap Confirm:', kb);
+  } catch (_) {}
   } catch (e) {
     try { await ctx.reply(`Error: ${e.message}`); } catch (_) {}
   }
@@ -748,32 +734,30 @@ bot.action(/buy:(.+)/, async ctx => {
 
 bot.action(/confirm:(.+)/, async ctx => {
   if (!stripe) return toast(ctx, 'Payments are currently unavailable.', { alert: true });
-  const canPost = await ensureChannelCanPost(ctx, 'announce the confirmation');
   await ctx.answerCbQuery();
   const sessionId = ctx.match[1];
-  const id = String(ctx.from.id);
   const r = await stripe.checkout.sessions.retrieve(sessionId);
   if (!r) {
-    try { if (canPost) { return await ctx.reply('Payment session not found'); } else { return await bot.telegram.sendMessage(id, 'Payment session not found'); } } catch (_) { return; }
+    try { return await ctx.reply('Payment session not found'); } catch (_) { return; }
   }
   if (r.payment_status !== 'paid' && r.status !== 'complete') {
-    try { if (canPost) { return await ctx.reply('Payment not completed'); } else { return await bot.telegram.sendMessage(id, 'Payment not completed'); } } catch (_) { return; }
+    try { return await ctx.reply('Payment not completed'); } catch (_) { return; }
   }
   const data = loadData();
   if (data.purchases[sessionId]) {
     const uid = r.metadata && r.metadata.userId;
     const u = uid ? data.users[uid] : null;
-    try { if (canPost) { return await ctx.reply(`Already processed. Points: ${u ? u.points : ''}`); } else { return await bot.telegram.sendMessage(id, `Already processed. Points: ${u ? u.points : ''}`); } } catch (_) { return; }
+    try { return await ctx.reply(`Already processed. Points: ${u ? u.points : ''}`); } catch (_) { return; }
   }
   const uid = r.metadata && r.metadata.userId;
   const tierId = r.metadata && r.metadata.tierId;
   const u = uid ? data.users[uid] : null;
   const tier = PRICING.find(t => t.id === tierId);
-  if (!u || !tier) { try { if (canPost) { return await ctx.reply('Not found'); } else { return await bot.telegram.sendMessage(id, 'Not found'); } } catch (_) { return; } }
+  if (!u || !tier) { try { return await ctx.reply('Not found'); } catch (_) { return; } }
   const expected = Math.round(tier.usd * 100);
   const paid = typeof r.amount_total === 'number' ? r.amount_total : null;
   const currency = (r.currency || '').toLowerCase();
-  if (paid !== expected || currency !== 'usd') { try { if (canPost) { return await ctx.reply('Payment amount mismatch'); } else { return await bot.telegram.sendMessage(id, 'Payment amount mismatch'); } } catch (_) { return; } }
+  if (paid !== expected || currency !== 'usd') { try { return await ctx.reply('Payment amount mismatch'); } catch (_) { return; } }
   const addPoints = Math.floor(tier.points);
   u.points = (u.points || 0) + addPoints;
   u.has_recharged = true;
@@ -786,7 +770,7 @@ bot.action(/confirm:(.+)/, async ctx => {
   }
   data.purchases[sessionId] = true;
   saveData(data);
-  try { if (canPost) { await ctx.reply(`Payment confirmed. Credited ${addPoints} points. Balance: ${u.points}`); } else { await bot.telegram.sendMessage(id, `Payment confirmed. Credited ${addPoints} points. Balance: ${u.points}`); } } catch (_) {}
+  try { await ctx.reply(`Payment confirmed. Credited ${addPoints} points. Balance: ${u.points}`); } catch (_) {}
 });
 
 bot.command('confirm', async ctx => {
