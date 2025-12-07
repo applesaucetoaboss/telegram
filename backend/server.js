@@ -780,7 +780,7 @@ bot.action(/buy:(.+)/, async ctx => {
       locale: 'en',
       success_url: `${origin}/?success=1&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${origin}/?cancel=1`,
-      metadata: { userId: String(id), tierId, chatId: chatMeta, promoterId: String(u.promoter_id || '') }
+      metadata: { userId: String(id), tierId, chatId: chatMeta, promoterId: String(u.promoter_id || ''), currency: 'usd' }
     });
       try { await ctx.answerCbQuery('Checkout ready'); } catch (_) {}
     } catch (e) {
@@ -789,16 +789,15 @@ bot.action(/buy:(.+)/, async ctx => {
       return;
     }
   const kb = Markup.inlineKeyboard([
-    [Markup.button.url(`Proceed to Payment`, `${PUBLIC_BASE ? `${PUBLIC_BASE}/pay/${session.id}` : (session.url || 'https://stripe.com')}`)],
+    [Markup.button.url(`Make Payment`, session.url || 'https://stripe.com')],
     [Markup.button.callback('Confirm Payment', `confirm:${session.id}`)],
     [Markup.button.callback('Main Menu', 'menu'), Markup.button.callback('Help', 'help')]
   ]);
   try {
     try { console.log('buy.checkout', { chat: ctx.chat && ctx.chat.id, type: ctx.chat && ctx.chat.type, from: id, tier: tierId, session: session && session.id, url: session && session.url }); } catch (_) {}
-    const posted = await sendInChannel(ctx, `Price: ${formatUSD(tier.usd)}\nComplete your purchase, then tap Confirm:`, { reply_markup: kb.reply_markup });
+    const posted = await sendInChannel(ctx, `Price: ${formatUSD(tier.usd)}\nAccepted: Visa · Mastercard · AmEx\nCurrency: USD\nComplete your purchase, then tap Confirm:`, { reply_markup: kb.reply_markup });
     if (!posted) {
-      const short = PUBLIC_BASE ? `${PUBLIC_BASE}/pay/${session.id}` : (session.url || '');
-      await sendInChannel(ctx, `Proceed to Payment: ${short}\nThen run /confirm ${session.id}`);
+      await sendInChannel(ctx, `Make Payment: ${session.url}\nThen run /confirm ${session.id}`);
     }
   } catch (_) {}
   } catch (e) {
