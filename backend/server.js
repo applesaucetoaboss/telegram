@@ -168,8 +168,36 @@ bot.action(/curr:(\w+):(.+)/, async ctx => {
       });
       try { await ctx.answerCbQuery('Checkout ready'); } catch (_) {}
     } catch (e) {
-      try { console.error('Stripe session create error', { msg: e && e.message, code: e && e.code, type: e && e.type }); } catch (_) {}
-      try { await sendInChannel(ctx, `Payment error: ${e && e.message ? e.message : 'Checkout failed'}`); } catch (_) {}
+      let session2 = null;
+      try {
+        session2 = await stripe.checkout.sessions.create({
+          payment_method_types: ['card'],
+          line_items: [{ price_data: { currency: 'usd', product_data: { name: `${tier.points} Points` }, unit_amount: Math.round(tier.usd * 100) }, quantity: 1 }],
+          mode: 'payment',
+          locale: 'en',
+          success_url: `${origin}/?success=1&session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${origin}/?cancel=1`,
+          metadata: { userId: String(id), tierId, chatId: chatMeta, promoterId: String(u.promoter_id || ''), currency: 'usd' }
+        });
+      } catch (e2) {
+        try { console.error('Stripe session create error', { msg: e2 && e2.message, code: e2 && e2.code, type: e2 && e2.type }); } catch (_) {}
+        try { await sendInChannel(ctx, `Payment error: ${e2 && e2.message ? e2.message : 'Checkout failed'}`); } catch (_) {}
+        return;
+      }
+      const kb2 = Markup.inlineKeyboard([
+        [Markup.button.url('Make Payment', session2.url || 'https://stripe.com')],
+        [Markup.button.callback('Confirm Payment', `confirm:${session2.id}`)],
+        [Markup.button.callback('Main Menu', 'menu'), Markup.button.callback('Help', 'help')]
+      ]);
+      try {
+        const posted2 = await sendInChannel(ctx, `Price: ${formatUSD(tier.usd)}\nAccepted: Visa · Mastercard · AmEx\nCurrency: USD\nComplete your purchase, then tap Confirm:`, { reply_markup: kb2.reply_markup });
+        if (!posted2) {
+          const ch = getPrimaryChannelId();
+          if (ch) {
+            try { await bot.telegram.sendMessage(ch, `Price: ${formatUSD(tier.usd)}\nAccepted: Visa · Mastercard · AmEx\nCurrency: USD\nComplete your purchase, then tap Confirm:`, { reply_markup: kb2.reply_markup }); } catch (_) {}
+          }
+        }
+      } catch (_) {}
       return;
     }
     const kb = Markup.inlineKeyboard([
@@ -342,6 +370,27 @@ app.get('/leaderboard', (req, res) => {
 
 app.get('/pricing', (req, res) => {
   res.json({ tiers: PRICING });
+});
+app.get('/payments/status', async (req, res) => {
+  try {
+    const info = await bot.telegram.getWebhookInfo();
+    res.json({ stripe_configured: !!stripe, mode: global.__botLaunchMode || 'none', webhook_info: info });
+  } catch (_) {
+    res.json({ stripe_configured: !!stripe, mode: global.__botLaunchMode || 'none' });
+  }
+});
+app.get('/payments/user/:id', (req, res) => {
+  const id = String(req.params.id || '');
+  const data = loadData();
+  const arr = (data.payments || []).filter(p => String(p.user_id) === id);
+  res.json({ payments: arr });
+});
+app.get('/payments/session/:id', (req, res) => {
+  const id = String(req.params.id || '');
+  const data = loadData();
+  const p = (data.payments || []).find(x => String(x.session_id) === id);
+  if (!p) return res.status(404).json({ error: 'not found' });
+  res.json({ payment: p });
 });
 app.get('/go/:sessionId', async (req, res) => {
   try {
@@ -889,15 +938,26 @@ bot.action(/confirm:(.+)/, async ctx => {
   const u = uid ? data.users[uid] : null;
   const tier = PRICING.find(t => t.id === tierId);
   if (!u || !tier) { try { return await sendInChannel(ctx, 'Not found'); } catch (_) { return; } }
-  const expected = Math.round(tier.usd * 100);
   const paid = typeof r.amount_total === 'number' ? r.amount_total : null;
   const currency = (r.currency || '').toLowerCase();
-  if (paid !== expected || currency !== 'usd') { try { return await sendInChannel(ctx, 'Payment amount mismatch'); } catch (_) { return; } }
+  let ok = false;
+  try {
+    const li = await stripe.checkout.sessions.list_line_items(sessionId, { limit: 1 });
+    const item = li && li.data && li.data[0];
+    const itemCurrency = ((item && item.price && item.price.currency) || (item && item.currency) || '').toLowerCase();
+    const unit = (item && item.price && item.price.unit_amount) || (item && item.amount_total) || 0;
+    const qty = (item && item.quantity) || 1;
+    const expectedAny = unit * qty;
+    ok = (paid === expectedAny) && (!!itemCurrency && itemCurrency === currency);
+  } catch (_) {}
+  if (!ok) { try { return await sendInChannel(ctx, 'Payment amount mismatch'); } catch (_) { return; } }
   const addPoints = Math.floor(tier.points);
   addAudit(uid, addPoints, 'stripe_credit', { sessionId, tierId, paid, currency });
   u.points = (u.points || 0) + addPoints;
   u.has_recharged = true;
   u.recharge_total_points = (u.recharge_total_points || 0) + tier.points;
+  data.payments = data.payments || [];
+  data.payments.push({ session_id: sessionId, user_id: String(uid), tier_id: String(tierId), amount_minor: paid, currency: currency.toUpperCase(), points_added: addPoints, created_at: Date.now() });
   const promoterId = (r.metadata && r.metadata.promoterId) || u.promoter_id || null;
   if (promoterId && data.users[promoterId]) {
     const amount = r.amount_total ? r.amount_total / 100 : tier.usd;
@@ -907,7 +967,7 @@ bot.action(/confirm:(.+)/, async ctx => {
   data.purchases[sessionId] = true;
   saveData(data);
   try { console.log('confirm.action.credit', { sessionId, addPoints, balance: u.points, user: uid }); } catch (_) {}
-  try { await sendInChannel(ctx, `Payment confirmed. Credited ${addPoints} points. Balance: ${u.points}`); } catch (_) {}
+  try { await sendInChannel(ctx, `Payment confirmed. Credited ${addPoints} points. Balance: ${u.points}\nReceipt: ${currency.toUpperCase()} ${(paid || 0) / 100} · Session ${sessionId}`); } catch (_) {}
 });
 
 bot.command('confirm', async ctx => {
