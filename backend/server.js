@@ -202,6 +202,22 @@ function addAudit(userId, delta, reason, meta) {
   saveDB();
 }
 
+function adjustPoints(userId, delta, reason, meta) {
+  const u = getOrCreateUser(String(userId));
+  const before = Number(u.points || 0);
+  let after = before + Number(delta);
+  if (after < 0) after = 0;
+  u.points = after;
+  if (delta > 0) {
+    u.has_recharged = true;
+    u.recharge_total_points = Number(u.recharge_total_points || 0) + Number(delta);
+  }
+  addAudit(String(userId), Number(delta), reason, meta);
+  saveDB();
+  return after;
+}
+
+
 // --- Telegram Bot ---
 const { Telegraf, Markup } = require('telegraf');
 const bot = new Telegraf(process.env.BOT_TOKEN || '');
@@ -271,23 +287,28 @@ async function ack(ctx, text) {
 }
 
 
+async function ack(ctx, text) {
+  if (ctx && ctx.updateType === 'callback_query') {
+    try { await ctx.answerCbQuery(text || 'Processing…'); } catch (_) {}
+  }
+}
+
+
 async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileId, isVideo) {
   const cost = isVideo ? 9 : 9;
   const user = DB.users[u.id];
   
   if ((user.points || 0) < cost) return { error: 'not enough points', required: cost, points: user.points };
   
-  user.points -= cost;
-  saveDB();
-  addAudit(u.id, -cost, 'faceswap_start', { isVideo });
+  adjustPoints(u.id, -cost, 'faceswap_start', { isVideo });
 
   const swapUrl = await getFileUrl(ctx, swapFileId, swapPath);
   const targetUrl = await getFileUrl(ctx, targetFileId, targetPath);
 
   if (!swapUrl || !targetUrl) {
-    user.points += cost;
-    saveDB();
-    return { error: 'Failed to generate file URLs.', points: user.points };
+    adjustPoints(u.id, cost, 'faceswap_refund_urls_failed', { isVideo });
+    return { error: 'Failed to generate file URLs.', points: user.points 
+  };
   }
 
   const key = process.env.MAGICAPI_KEY || process.env.API_MARKET_KEY;
@@ -325,10 +346,10 @@ async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileI
 
     const requestId = result && (result.request_id || result.requestId || result.id);
     if (!requestId) {
-      user.points += cost;
-      saveDB();
+      adjustPoints(u.id, cost, 'faceswap_refund_api_error', { isVideo });
       console.error('MagicAPI Error', result);
       return { error: 'API Error: ' + (result.message || JSON.stringify(result)), points: user.points };
+    }
     }
 
     // --- PERSISTENCE START ---
@@ -347,8 +368,7 @@ async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileI
     return { started: true, points: user.points, requestId };
 
   } catch (e) {
-    user.points += cost;
-    saveDB();
+    adjustPoints(u.id, cost, 'faceswap_refund_network_error', { isVideo });
     return { error: 'Network Error: ' + e.message, points: user.points };
   }
 }
@@ -468,6 +488,7 @@ bot.action('buy', async ctx => {
     await ack(ctx, 'Opening packages…');
     await ack(ctx, 'Opening packages…');
     await ack(ctx, 'Opening packages…');
+    await ack(ctx, 'Opening packages…');
     const u = getOrCreateUser(String(ctx.from.id));
     const rows = PRICING.map(p => [Markup.button.callback(`${p.points} Pts - ${formatUSD(p.usd)}`, `buy:${p.id}`)]);
     await ctx.reply('Select a package:', Markup.inlineKeyboard(rows));
@@ -476,6 +497,7 @@ bot.action('buy', async ctx => {
 
 bot.action(/buy:(.+)/, async ctx => {
   try {
+    await ack(ctx, 'Select currency…');
     await ack(ctx, 'Select currency…');
     const tierId = ctx.match[1];
     const tier = PRICING.find(t => t.id === tierId);
@@ -503,6 +525,7 @@ bot.action(/pay:(\w+):(.+)/, async ctx => {
   const tier = PRICING.find(t => t.id === tierId);
   
   try {
+    await ack(ctx, 'Creating checkout…');
     await ack(ctx, 'Creating checkout…');
     const rate = await fetchUsdRate(curr);
     const amount = toMinorUnits(tier.usd, curr, rate);
@@ -547,6 +570,7 @@ bot.action(/confirm:(.+)/, async ctx => {
   
   try {
     await ack(ctx, 'Verifying payment…');
+    await ack(ctx, 'Verifying payment…');
     const sid = (DB.pending_sessions || {})[shortId];
     if (!sid) return ctx.reply('Payment link expired or invalid.');
     
@@ -556,12 +580,10 @@ bot.action(/confirm:(.+)/, async ctx => {
       
       const uid = s.metadata.userId;
       const pts = Number(s.metadata.points);
-      const u = getOrCreateUser(uid);
-      
-      u.points += pts;
+      adjustPoints(uid, pts, 'purchase_confirm', { session_id: sid, points: pts });
       DB.purchases[sid] = true;
       saveDB();
-      ctx.reply(`Success! Added ${pts} points. Total: ${u.points}`);
+      ctx.reply(`Success! Added ${pts} points. Total: ${DB.users[uid].points}`);
     } else {
       ctx.reply('Payment not yet confirmed. Try again in a moment.');
     }
@@ -697,6 +719,19 @@ bot.on('callback_query', async (ctx) => {
 
 bot.on('callback_query', async (ctx) => {
   try {
+    const d = (ctx.update && ctx.update.callback_query && ctx.update.callback_query.data) || '';
+    const known = (d === 'buy' || d === 'faceswap' || d === 'imageswap' || d === 'cancel' || /^buy:/.test(d) || /^pay:/.test(d) || /^confirm:/.test(d));
+    if (!known) {
+      await ack(ctx, 'Unsupported button');
+      await ctx.reply('That button is not recognized. Please use /start and try again.').catch(()=>{});
+    }
+  } catch (e) {
+    console.error('Callback fallback error', e);
+  }
+});
+
+bot.on('callback_query', async (ctx) => {
+  try {
     await ack(ctx, 'Verifying payment…');
     await ack(ctx, 'Creating checkout…');
     const d = (ctx.update && ctx.update.callback_query && ctx.update.callback_query.data) || '';
@@ -726,8 +761,7 @@ app.post('/stripe/webhook', express.raw({ type: 'application/json' }), (req, res
       const pts = Number(s.metadata.points);
       
       if (!DB.purchases[s.id]) {
-        const u = getOrCreateUser(uid);
-        u.points += pts;
+        adjustPoints(uid, pts, 'purchase_webhook', { session_id: s.id, points: pts });
         DB.purchases[s.id] = true;
         saveDB();
         bot.telegram.sendMessage(uid, `Payment successful! Added ${pts} points.`).catch(()=>{});
@@ -741,6 +775,22 @@ app.post('/stripe/webhook', express.raw({ type: 'application/json' }), (req, res
 
 // Root
 app.get('/', (req, res) => res.send('Telegram Bot Server Running'));
+
+app.get('/api/points', (req, res) => {
+  const uid = String(req.query.userId || '');
+  if (!uid) return res.status(400).json({ error: 'userId required' });
+  const u = getOrCreateUser(uid);
+  res.json({ id: u.id, points: u.points, has_recharged: !!u.has_recharged, recharge_total_points: Number(u.recharge_total_points || 0) });
+});
+
+app.get('/api/audits', (req, res) => {
+  const uid = String(req.query.userId || '');
+  if (!uid) return res.status(400).json({ error: 'userId required' });
+  const u = getOrCreateUser(uid);
+  const entries = (DB.audits && DB.audits[uid]) || [];
+  res.json({ id: u.id, points: u.points, audits: entries });
+});
+
 
 // Start
 const PORT = process.env.PORT || 3000;
