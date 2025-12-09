@@ -207,7 +207,14 @@ const { Telegraf, Markup } = require('telegraf');
 const bot = new Telegraf(process.env.BOT_TOKEN || '');
 
 bot.use(async (ctx, next) => {
-  try { console.log('update', ctx.updateType, (ctx.from && ctx.from.id)); } catch (_) {}
+  try {
+    if (ctx.updateType === 'callback_query') {
+      const data = (ctx.update && ctx.update.callback_query && ctx.update.callback_query.data) || '';
+      console.log('update callback_query', (ctx.from && ctx.from.id), 'data=', data.slice(0, 80), 'len=', data.length);
+    } else {
+      console.log('update', ctx.updateType, (ctx.from && ctx.from.id));
+    }
+  } catch (_) {}
   return next();
 });
 
@@ -242,6 +249,27 @@ async function getFileUrl(ctx, fileId, localPath) {
     return null;
   }
 }
+
+async function ack(ctx, text) {
+  if (ctx && ctx.updateType === 'callback_query') {
+    try { await ctx.answerCbQuery(text || 'Processing…'); } catch (_) {}
+  }
+}
+
+
+async function ack(ctx, text) {
+  if (ctx && ctx.updateType === 'callback_query') {
+    try { await ctx.answerCbQuery(text || 'Processing…'); } catch (_) {}
+  }
+}
+
+
+async function ack(ctx, text) {
+  if (ctx && ctx.updateType === 'callback_query') {
+    try { await ctx.answerCbQuery(text || 'Processing…'); } catch (_) {}
+  }
+}
+
 
 async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileId, isVideo) {
   const cost = isVideo ? 9 : 9;
@@ -437,6 +465,9 @@ bot.command('status', ctx => {
 
 bot.action('buy', async ctx => {
   try {
+    await ack(ctx, 'Opening packages…');
+    await ack(ctx, 'Opening packages…');
+    await ack(ctx, 'Opening packages…');
     const u = getOrCreateUser(String(ctx.from.id));
     const rows = PRICING.map(p => [Markup.button.callback(`${p.points} Pts - ${formatUSD(p.usd)}`, `buy:${p.id}`)]);
     await ctx.reply('Select a package:', Markup.inlineKeyboard(rows));
@@ -445,6 +476,7 @@ bot.action('buy', async ctx => {
 
 bot.action(/buy:(.+)/, async ctx => {
   try {
+    await ack(ctx, 'Select currency…');
     const tierId = ctx.match[1];
     const tier = PRICING.find(t => t.id === tierId);
     if (!tier) return ctx.reply('Invalid tier');
@@ -458,7 +490,8 @@ bot.action(/buy:(.+)/, async ctx => {
   } catch(e) { console.error(e); }
 });
 
-bot.action('cancel', ctx => {
+bot.action('cancel', async ctx => {
+  await ack(ctx, 'Cancelled');
   ctx.deleteMessage().catch(()=>{});
   ctx.reply('Cancelled.');
 });
@@ -470,6 +503,7 @@ bot.action(/pay:(\w+):(.+)/, async ctx => {
   const tier = PRICING.find(t => t.id === tierId);
   
   try {
+    await ack(ctx, 'Creating checkout…');
     const rate = await fetchUsdRate(curr);
     const amount = toMinorUnits(tier.usd, curr, rate);
     const origin = PUBLIC_BASE || 'https://stripe.com';
@@ -512,6 +546,7 @@ bot.action(/confirm:(.+)/, async ctx => {
   if (!stripe) return;
   
   try {
+    await ack(ctx, 'Verifying payment…');
     const sid = (DB.pending_sessions || {})[shortId];
     if (!sid) return ctx.reply('Payment link expired or invalid.');
     
@@ -537,7 +572,8 @@ bot.command('faceswap', ctx => {
   setPending(String(ctx.from.id), { mode: 'faceswap', step: 'swap' });
   ctx.reply('Send the SWAP photo (the face you want to use).');
 });
-bot.action('faceswap', ctx => {
+bot.action('faceswap', async ctx => {
+  await ack(ctx, 'Mode set: Video');
   setPending(String(ctx.from.id), { mode: 'faceswap', step: 'swap' });
   ctx.reply('Send the SWAP photo (the face you want to use).');
 });
@@ -546,7 +582,8 @@ bot.command('imageswap', ctx => {
   setPending(String(ctx.from.id), { mode: 'imageswap', step: 'swap' });
   ctx.reply('Send the SWAP photo (the face you want to use).');
 });
-bot.action('imageswap', ctx => {
+bot.action('imageswap', async ctx => {
+  await ack(ctx, 'Mode set: Image');
   setPending(String(ctx.from.id), { mode: 'imageswap', step: 'swap' });
   ctx.reply('Send the SWAP photo (the face you want to use).');
 });
@@ -632,6 +669,47 @@ bot.command('debug', ctx => {
 });
 
 // --- Express App ---
+bot.on('callback_query', async (ctx) => {
+  try {
+    const d = (ctx.update && ctx.update.callback_query && ctx.update.callback_query.data) || '';
+    const known = (d === 'buy' || d === 'faceswap' || d === 'imageswap' || d === 'cancel' || /^buy:/.test(d) || /^pay:/.test(d) || /^confirm:/.test(d));
+    if (!known) {
+      await ack(ctx, 'Unsupported button');
+      await ctx.reply('That button is not recognized. Please use /start and try again.').catch(()=>{});
+    }
+  } catch (e) {
+    console.error('Callback fallback error', e);
+  }
+});
+
+bot.on('callback_query', async (ctx) => {
+  try {
+    const d = (ctx.update && ctx.update.callback_query && ctx.update.callback_query.data) || '';
+    const known = (d === 'buy' || d === 'faceswap' || d === 'imageswap' || d === 'cancel' || /^buy:/.test(d) || /^pay:/.test(d) || /^confirm:/.test(d));
+    if (!known) {
+      await ack(ctx, 'Unsupported button');
+      await ctx.reply('That button is not recognized. Please use /start and try again.').catch(()=>{});
+    }
+  } catch (e) {
+    console.error('Callback fallback error', e);
+  }
+});
+
+bot.on('callback_query', async (ctx) => {
+  try {
+    await ack(ctx, 'Verifying payment…');
+    await ack(ctx, 'Creating checkout…');
+    const d = (ctx.update && ctx.update.callback_query && ctx.update.callback_query.data) || '';
+    const known = (d === 'buy' || d === 'faceswap' || d === 'imageswap' || d === 'cancel' || /^buy:/.test(d) || /^pay:/.test(d) || /^confirm:/.test(d));
+    if (!known) {
+      await ack(ctx, 'Unsupported button');
+      await ctx.reply('That button is not recognized. Please use /start and try again.').catch(()=>{});
+    }
+  } catch (e) {
+    console.error('Callback fallback error', e);
+  }
+});
+
 const app = express();
 app.use(express.json());
 app.use('/uploads', express.static(uploadsDir));
