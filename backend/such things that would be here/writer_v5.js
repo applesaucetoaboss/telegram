@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
+<<<<<<< HEAD
 const serverCode = `require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 if (process.env.NODE_ENV !== 'test') {
   console.log('Server script started (V5 - Cleanup & Stability)');
@@ -1111,3 +1112,61 @@ const targetPath = path.resolve(__dirname, '../server.js');
 console.log('Writing to', targetPath);
 fs.writeFileSync(targetPath, serverCode);
 console.log('Done');
+=======
+const target = path.resolve(__dirname, '../server.js');
+let code = fs.readFileSync(target, 'utf8');
+
+function insertAfter(pattern, addition) {
+  const m = code.match(pattern);
+  if (!m) return false;
+  const idx = code.indexOf(m[0]) + m[0].length;
+  code = code.slice(0, idx) + addition + code.slice(idx);
+  return true;
+}
+
+function replaceOnce(pattern, replacement) {
+  code = code.replace(pattern, replacement);
+}
+
+// Enhance logging in bot.use
+replaceOnce(
+  /bot\.use\(async \(ctx, next\) => \{[\s\S]*?return next\(\);\n\}\);/,
+  `bot.use(async (ctx, next) => {\n  try {\n    if (ctx.updateType === 'callback_query') {\n      const data = (ctx.update && ctx.update.callback_query && ctx.update.callback_query.data) || '';\n      console.log('update callback_query', (ctx.from && ctx.from.id), 'data=', data.slice(0, 80), 'len=', data.length);\n    } else {\n      console.log('update', ctx.updateType, (ctx.from && ctx.from.id));\n    }\n  } catch (_) {}\n  return next();\n});`
+);
+
+// Add ack helper after getFileUrl function
+insertAfter(/async function getFileUrl[\s\S]*?\n\}/, `\n\n// --- UX helpers for Telegram buttons ---\nfunction ack(ctx, text) {\n  if (ctx && ctx.updateType === 'callback_query') {\n    return ctx.answerCbQuery(text || 'Processing…').catch(() => {});\n  }\n}\n`);
+
+// Add setMyCommands after start command
+insertAfter(/bot\.command\('start',[\s\S]*?\}\);/, `\n\n// Expose commands for better accessibility\nbot.telegram.setMyCommands([\n  { command: 'start', description: 'Start the bot' },\n  { command: 'status', description: 'System status' },\n  { command: 'faceswap', description: 'Video face swap' },\n  { command: 'imageswap', description: 'Image face swap' },\n  { command: 'reset', description: 'Reset state' },\n  { command: 'debug', description: 'Show current state' }\n]).catch(() => {});\n`);
+
+// Add ack calls to key actions
+replaceOnce(/bot\.action\('buy',[\s\S]*?\{\s*try \{/, (m) => m + "\n    ack(ctx, 'Opening packages…');");
+replaceOnce(/bot\.action\(\/buy:\(\.\+\)\/,[\s\S]*?\{\s*try \{/, (m) => m + "\n    ack(ctx, 'Select currency…');");
+replaceOnce(/bot\.action\('cancel',[\s\S]*?\{/, (m) => m + "\n  ack(ctx, 'Cancelled');");
+replaceOnce(/bot\.action\(\/pay:\\w\+:\(\.\+\)\/[\s\S]*?\{\s*try \{/, (m) => m + "\n    ack(ctx, 'Creating checkout…');");
+replaceOnce(/bot\.action\(\/confirm:\(\.\+\)\/[\s\S]*?\{\s*try \{/, (m) => m + "\n    ack(ctx, 'Verifying payment…');");
+replaceOnce(/bot\.action\('faceswap',[\s\S]*?\{/, (m) => m + "\n  ack(ctx, 'Mode set: Video');");
+replaceOnce(/bot\.action\('imageswap',[\s\S]*?\{/, (m) => m + "\n  ack(ctx, 'Mode set: Image');");
+
+// Add fallback callback_query handler before Express app
+insertAfter(/\n\/\/ --- Express App ---/, `\n// Fallback for unknown/invalid callback data to avoid unresponsive buttons\nbot.on('callback_query', async (ctx) => {\n  try {\n    const data = (ctx.update && ctx.update.callback_query && ctx.update.callback_query.data) || '';\n    const known = (\n      data === 'buy' || data === 'faceswap' || data === 'imageswap' || data === 'cancel' ||\n      /^buy:/.test(data) || /^pay:/.test(data) || /^confirm:/.test(data)\n    );\n    if (!known) {\n      await ack(ctx, 'Unsupported button');\n      await ctx.reply('That button is not recognized. Please use /start and try again.').catch(()=>{});\n    }\n  } catch (e) {\n    console.error('Callback fallback error', e);\n  }\n});\n`);
+
+// Inject pendingSessions map after express app initialization
+insertAfter(/const app = express\(\);/, `\n// Short ID mapping to satisfy Telegram callback data limit\nconst pendingSessions = {};\n`);
+
+// Replace confirm button to use shortId and map to session id
+replaceOnce(
+  /const kb = Markup\.inlineKeyboard\(\[[\s\S]*?Markup\.button\.url\([^\)]*\)[\s\S]*?\],\s*\[Markup\.button\.callback\('Confirm Payment', `confirm:\$\{session\.id\}`\)\][\s\S]*?\]\);/,
+  `const shortId = Math.random().toString(36).slice(2,10);\npendingSessions[shortId] = session.id;\nconst kb = Markup.inlineKeyboard([\n  [Markup.button.url(\`Pay \$\${tier.usd}\`, session.url || 'https://stripe.com')],\n  [Markup.button.callback('Confirm Payment', \`confirm:\${shortId}\`)],\n  [Markup.button.callback('Main Menu', 'menu'), Markup.button.callback('Help', 'help')]\n]);`
+);
+
+// In confirm handler, resolve shortId to actual session id
+replaceOnce(
+  /const sessionId = ctx\.match\[1\];/,
+  `const short = ctx.match[1];\n  const sessionId = pendingSessions[short] || short;`
+);
+
+fs.writeFileSync(target, code);
+console.log('writer_v5 applied changes to', target);
+>>>>>>> db8c81c (fix: responsive Telegram buttons and payment callbacks)

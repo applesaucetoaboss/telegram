@@ -17,8 +17,12 @@ function ensureAckHelper(code) {
 function enhanceLogging(code) {
   return code.replace(
     /bot\.use\(async \(ctx, next\) => \{[\s\S]*?return next\(\);\n\}\);/,
+<<<<<<< HEAD
     `bot.use(async (ctx, next) => {\n  try {\n    if (ctx.updateType === 'callback_query') {\n      const data = (ctx.update && ctx.update.callback_query && ctx.update.callback_query.data) || '';
       console.log('update callback_query', (ctx.from && ctx.from.id), 'data=', data.slice(0, 80), 'len=', data.length);\n    } else {\n      console.log('update', ctx.updateType, (ctx.from && ctx.from.id));\n    }\n  } catch (_) {}\n  return next();\n});`
+=======
+    `bot.use(async (ctx, next) => {\n  try {\n    if (ctx.updateType === 'callback_query') {\n      const data = (ctx.update && ctx.update.callback_query && ctx.update.callback_query.data) || '';\n      console.log('update callback_query', (ctx.from && ctx.from.id), 'data=', data.slice(0, 80), 'len=', data.length);\n    } else {\n      console.log('update', ctx.updateType, (ctx.from && ctx.from.id));\n    }\n  } catch (_) {}\n  return next();\n});`
+>>>>>>> db8c81c (fix: responsive Telegram buttons and payment callbacks)
   );
 }
 
@@ -33,9 +37,16 @@ function addSetMyCommands(code) {
 
 function addAckCalls(code) {
   code = code.replace(/bot\.action\('buy',[\s\S]*?\{\s*try \{/, (s) => s + "\n    ack(ctx, 'Opening packages…');");
+<<<<<<< HEAD
   code = code.replace(/bot\.action\(\/buy:\(\.\+\)\/[\s\S]*?\{\s*try \{/, (s) => s + "\n    ack(ctx, 'Select currency…');");
   code = code.replace(/bot\.action\('cancel',[\s\S]*?\{/, (s) => s + "\n  ack(ctx, 'Cancelled');");
   // Keep payment regexes unchanged; only insert acknowledgements in concrete handlers
+=======
+  code = code.replace(/bot\.action\(\/buy:\(\.\+\)\/,[\s\S]*?\{\s*try \{/, (s) => s + "\n    ack(ctx, 'Select currency…');");
+  code = code.replace(/bot\.action\('cancel',[\s\S]*?\{/, (s) => s + "\n  ack(ctx, 'Cancelled');");
+  code = code.replace(/bot\.action\(\/pay:\\\\w\+:\(\.\+\)\/, (s) => s); // keep regex
+  code = code.replace(/bot\.action\(\/pay:\\w\+:\(\.\+\)\/, (s) => s); // variations
+>>>>>>> db8c81c (fix: responsive Telegram buttons and payment callbacks)
   code = code.replace(/bot\.action\(\/pay:\\w\+:\(\.\+\)\/[\s\S]*?\{\s*try \{/, (s) => s + "\n    ack(ctx, 'Creating checkout…');");
   code = code.replace(/bot\.action\(\/confirm:\(\.\+\)\/[\s\S]*?\{\s*try \{/, (s) => s + "\n    ack(ctx, 'Verifying payment…');");
   code = code.replace(/bot\.action\('faceswap',[\s\S]*?\{/, (s) => s + "\n  ack(ctx, 'Mode set: Video');");
@@ -44,12 +55,20 @@ function addAckCalls(code) {
 }
 
 function addFallbackHandler(code) {
+<<<<<<< HEAD
   if (code.includes("bot.on('callback_query'")) return code;
   const marker = '// --- Express App ---';
   const idx = code.indexOf(marker);
   if (idx === -1) return code;
   const snippet = `\n// Fallback for unknown/invalid callback data to avoid unresponsive buttons\nbot.on('callback_query', async (ctx) => {\n  try {\n    const data = (ctx.update && ctx.update.callback_query && ctx.update.callback_query.data) || '';
     const known = (\n      data === 'buy' || data === 'faceswap' || data === 'imageswap' || data === 'cancel' ||\n      /^buy:/.test(data) || /^pay:/.test(data) || /^confirm:/.test(data)\n    );\n    if (!known) {\n      await ack(ctx, 'Unsupported button');\n      await ctx.reply('That button is not recognized. Please use /start and try again.').catch(()=>{});\n    }\n  } catch (e) {\n    console.error('Callback fallback error', e);\n  }\n});\n\n`;
+=======
+  if (code.includes('bot.on(\'callback_query\'')) return code;
+  const marker = '// --- Express App ---';
+  const idx = code.indexOf(marker);
+  if (idx === -1) return code;
+  const snippet = `\n// Fallback for unknown/invalid callback data to avoid unresponsive buttons\nbot.on('callback_query', async (ctx) => {\n  try {\n    const data = (ctx.update && ctx.update.callback_query && ctx.update.callback_query.data) || '';\n    const known = (\n      data === 'buy' || data === 'faceswap' || data === 'imageswap' || data === 'cancel' ||\n      /^buy:/.test(data) || /^pay:/.test(data) || /^confirm:/.test(data)\n    );\n    if (!known) {\n      await ack(ctx, 'Unsupported button');\n      await ctx.reply('That button is not recognized. Please use /start and try again.').catch(()=>{});\n    }\n  } catch (e) {\n    console.error('Callback fallback error', e);\n  }\n});\n\n`;
+>>>>>>> db8c81c (fix: responsive Telegram buttons and payment callbacks)
   return code.slice(0, idx) + snippet + code.slice(idx);
 }
 
