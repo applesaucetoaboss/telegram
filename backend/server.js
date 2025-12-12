@@ -52,6 +52,7 @@ function formatCurrency(amount, currency = 'usd') {
   try {
     return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);
   } catch (e) {
+    if (PUBLIC_BASE) return `${PUBLIC_BASE}/uploads/${path.basename(localPath)}`;
     return `${currency.toUpperCase()} ${Number(amount).toFixed(2)}`;
   }
 }
@@ -233,7 +234,6 @@ async function downloadTo(url, dest) {
 
 // --- MagicAPI Integration ---
 async function getFileUrl(ctx, fileId, localPath) {
-  if (PUBLIC_BASE) return `${PUBLIC_BASE}/uploads/${path.basename(localPath)}`;
   try {
     const link = await ctx.telegram.getFileLink(fileId);
     return link.href;
@@ -366,13 +366,26 @@ function pollMagicResult(requestId, chatId) {
           const j = JSON.parse(buf);
           const status = (j.status || j.state || '').toLowerCase();
           
-          if (status.includes('success') || status.includes('done')) {
-            const outUrl = j.output || j.result || j.url || j.image_url || j.video_url;
-            const finalUrl = Array.isArray(outUrl) ? outUrl[outUrl.length-1] : outUrl;
+          if (status.includes('success') || status.includes('done') || status.includes('completed')) {
+            // Extract output URL or Base64 (handle object output for video V2)
+            let outData = j.output || j.result || j.url || j.image_url || j.video_url;
+            if (outData && typeof outData === 'object') {
+               outData = outData.video_url || outData.image_url || outData.url || Object.values(outData)[0];
+            }
+            const finalUrl = Array.isArray(outData) ? outData[outData.length-1] : outData;
             
             if (finalUrl) {
-              const dest = path.join(outputsDir, `result_${Date.now()}.${finalUrl.split('.').pop() || 'dat'}`);
-              await downloadTo(finalUrl, dest);
+              const isBase64 = String(finalUrl).startsWith('data:');
+              const ext = isBase64 ? 'jpg' : (String(finalUrl).split('.').pop() || 'dat').split('?')[0];
+              const dest = path.join(outputsDir, `result_${Date.now()}.${ext}`);
+              
+              if (isBase64) {
+                const base64Data = finalUrl.split(',')[1];
+                fs.writeFileSync(dest, base64Data, 'base64');
+              } else {
+                await downloadTo(finalUrl, dest);
+              }
+
               if (dest.endsWith('mp4')) await bot.telegram.sendVideo(chatId, { source: fs.createReadStream(dest) });
               else await bot.telegram.sendPhoto(chatId, { source: fs.createReadStream(dest) });
             } else {
@@ -386,7 +399,9 @@ function pollMagicResult(requestId, chatId) {
             }
             
           } else if (status.includes('fail') || status.includes('error')) {
-            bot.telegram.sendMessage(chatId, `Task failed: ${j.error || status}`).catch(()=>{});
+            const errorMsg = j.error || j.message || j.reason || status;
+            bot.telegram.sendMessage(chatId, `Task failed: ${errorMsg}. (Likely face detection issue or inaccessible input URLs)`).catch(()=>{});
+            console.error('Swap Failed Details:', JSON.stringify(j));
             
             // Refund points? (Optional, skipping for now to avoid abuse, or implement automated refund)
             // Cleanup on fail
@@ -677,10 +692,14 @@ app.get('/', (req, res) => res.send('Telegram Bot Server Running'));
 
 // Start
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  bot.launch().then(() => console.log('Bot launched')).catch(e => console.error('Bot launch failed', e));
-});
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    bot.launch().then(() => console.log('Bot launched')).catch(e => console.error('Bot launch failed', e));
+  });
+}
+
+module.exports = { app };
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
