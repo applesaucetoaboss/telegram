@@ -562,25 +562,62 @@ bot.action(/confirm:(.+)/, async ctx => {
 
 bot.command('faceswap', ctx => {
   setPending(String(ctx.from.id), { mode: 'faceswap', step: 'swap' });
-  ctx.reply('Send the SWAP photo (the face you want to use).');
+  ctx.reply('Please Reply to this message with the SWAP photo for VIDEO Face Swap.', Markup.forceReply());
 });
 bot.action('faceswap', ctx => {
   setPending(String(ctx.from.id), { mode: 'faceswap', step: 'swap' });
-  ctx.reply('Send the SWAP photo (the face you want to use).');
+  ctx.reply('Please Reply to this message with the SWAP photo for VIDEO Face Swap.', Markup.forceReply());
 });
 
 bot.command('imageswap', ctx => {
   setPending(String(ctx.from.id), { mode: 'imageswap', step: 'swap' });
-  ctx.reply('Send the SWAP photo (the face you want to use).');
+  ctx.reply('Please Reply to this message with the SWAP photo for IMAGE Face Swap.', Markup.forceReply());
 });
 bot.action('imageswap', ctx => {
   setPending(String(ctx.from.id), { mode: 'imageswap', step: 'swap' });
-  ctx.reply('Send the SWAP photo (the face you want to use).');
+  ctx.reply('Please Reply to this message with the SWAP photo for IMAGE Face Swap.', Markup.forceReply());
 });
 
 bot.on('photo', async ctx => {
   const uid = String(ctx.from.id);
   console.log('DEBUG: bot.on photo', process.pid, uid);
+  
+  // --- STATELESS FLOW CHECK ---
+  const replyText = (ctx.message.reply_to_message && ctx.message.reply_to_message.text) || '';
+  if (replyText) {
+    const fileId = ctx.message.photo[ctx.message.photo.length-1].file_id;
+    const link = await ctx.telegram.getFileLink(fileId);
+    const localPath = path.join(uploadsDir, `photo_${uid}_${Date.now()}.jpg`);
+    await downloadTo(link.href, localPath);
+
+    if (replyText.includes('for VIDEO Face Swap')) {
+        // Step 1: Swap Photo received for Video
+        ctx.reply(`Received SWAP photo. Now Reply to this message with the TARGET VIDEO.\nRef: vid_swap:${fileId}`, Markup.forceReply());
+        return;
+    }
+    if (replyText.includes('for IMAGE Face Swap')) {
+        // Step 1: Swap Photo received for Image
+        ctx.reply(`Received SWAP photo. Now Reply to this message with the TARGET PHOTO.\nRef: img_swap:${fileId}`, Markup.forceReply());
+        return;
+    }
+    if (replyText.includes('Ref: img_swap:')) {
+        // Step 2: Target Photo received for Image
+        const match = replyText.match(/Ref: img_swap:([\w-]+)/);
+        if (match && match[1]) {
+           const swapFileId = match[1];
+           const swapPath = path.join(uploadsDir, `swap_${uid}_${Date.now()}.jpg`);
+           const swapLink = await ctx.telegram.getFileLink(swapFileId);
+           await downloadTo(swapLink.href, swapPath);
+           
+           ctx.reply('Processing Image Swap (Stateless)...');
+           const res = await runFaceswap(ctx, getOrCreateUser(uid), swapPath, localPath, swapFileId, fileId, false);
+           if (res.error) ctx.reply(res.error);
+           else ctx.reply('Job started! ID: ' + res.requestId);
+           return;
+        }
+    }
+  }
+  // --- END STATELESS FLOW ---
   const p = getPending(uid);
   
   if (!p) {
@@ -620,7 +657,31 @@ bot.on('photo', async ctx => {
 
 bot.on('video', async ctx => {
   const uid = String(ctx.from.id);
-  console.log('DEBUG: bot.on photo', process.pid, uid);
+  console.log('DEBUG: bot.on video', process.pid, uid);
+  
+  // --- STATELESS FLOW CHECK ---
+  const replyText = (ctx.message.reply_to_message && ctx.message.reply_to_message.text) || '';
+  if (replyText.includes('Ref: vid_swap:')) {
+      const fileId = ctx.message.video.file_id;
+      const link = await ctx.telegram.getFileLink(fileId);
+      const localPath = path.join(uploadsDir, `video_${uid}_${Date.now()}.mp4`);
+      await downloadTo(link.href, localPath);
+
+      const match = replyText.match(/Ref: vid_swap:([\w-]+)/);
+      if (match && match[1]) {
+         const swapFileId = match[1];
+         const swapPath = path.join(uploadsDir, `swap_${uid}_${Date.now()}.jpg`);
+         const swapLink = await ctx.telegram.getFileLink(swapFileId);
+         await downloadTo(swapLink.href, swapPath);
+         
+         ctx.reply('Processing Video Swap (Stateless)...');
+         const res = await runFaceswap(ctx, getOrCreateUser(uid), swapPath, localPath, swapFileId, fileId, true);
+         if (res.error) ctx.reply(res.error);
+         else ctx.reply('Job started! ID: ' + res.requestId);
+         return;
+      }
+  }
+  // --- END STATELESS FLOW ---
   const p = getPending(uid);
   if (!p) {
     return ctx.reply('Please select a mode (Video/Image Swap) from the menu first.',
