@@ -692,10 +692,14 @@ app.get('/', (req, res) => res.send('Telegram Bot Server Running'));
 
 // Start
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  bot.launch().then(() => console.log('Bot launched')).catch(e => console.error('Bot launch failed', e));
-});
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    bot.launch().then(() => console.log('Bot launched')).catch(e => console.error('Bot launch failed', e));
+  });
+}
+
+module.exports = { app };
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
