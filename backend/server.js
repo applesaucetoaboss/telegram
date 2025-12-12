@@ -52,6 +52,7 @@ function formatCurrency(amount, currency = 'usd') {
   try {
     return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);
   } catch (e) {
+    if (PUBLIC_BASE) return `${PUBLIC_BASE}/uploads/${path.basename(localPath)}`;
     return `${currency.toUpperCase()} ${Number(amount).toFixed(2)}`;
   }
 }
@@ -233,7 +234,6 @@ async function downloadTo(url, dest) {
 
 // --- MagicAPI Integration ---
 async function getFileUrl(ctx, fileId, localPath) {
-  if (PUBLIC_BASE) return `${PUBLIC_BASE}/uploads/${path.basename(localPath)}`;
   try {
     const link = await ctx.telegram.getFileLink(fileId);
     return link.href;
