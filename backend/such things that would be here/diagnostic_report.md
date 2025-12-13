@@ -29,3 +29,7 @@
 - **Health Checks:** A `check_health.js` script is now available for pre-deployment verification.
 - **Global Error Handling:** Added handlers to catch and log unhandled exceptions, preventing silent crashes.
 - **Enhanced Logging:** API errors are now logged in full detail to aid future debugging.
+
+## 5. Deployment Configuration (New)
+A `vercel.json` file has been created in `backend/such things that would be here/`.
+**Action Required:** Move this file to the `backend/` root directory before deploying to Vercel. This ensures the server correctly handles all incoming requests.
