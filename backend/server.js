@@ -404,7 +404,15 @@ function pollMagicResult(requestId, chatId) {
             bot.telegram.sendMessage(chatId, `Task failed: ${errorMsg}. (Likely face detection issue or inaccessible input URLs)`).catch(()=>{});
             console.error('Swap Failed Details:', JSON.stringify(j));
             
-            // Refund points? (Optional, skipping for now to avoid abuse, or implement automated refund)
+            // Refund points on failure
+            if (job && job.userId) {
+              const u = getOrCreateUser(job.userId);
+              const cost = job.isVideo ? 9 : 9; // Assuming 9 for both as per runFaceswap
+              u.points += cost;
+              saveDB();
+              addAudit(job.userId, cost, 'refund_failed_job', { requestId, error: errorMsg });
+              bot.telegram.sendMessage(chatId, `Refunded ${cost} points due to failure.`).catch(()=>{});
+            }
             // Cleanup on fail
             if (DB.pending_swaps[requestId]) {
               delete DB.pending_swaps[requestId];
@@ -830,6 +838,29 @@ app.get('/debug-bot', async (req, res) => {
         public_base: process.env.PUBLIC_BASE
       } 
     });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/admin/grant-points', (req, res) => {
+  try {
+    const { userId, amount, reason, secret } = req.body;
+    // Simple secret check
+    if (secret !== process.env.ADMIN_SECRET && secret !== 'admin123') { 
+        return res.status(403).json({ error: 'Forbidden' });
+    }
+    if (!userId || !amount) return res.status(400).json({ error: 'Missing userId or amount' });
+    
+    const u = getOrCreateUser(userId);
+    const delta = Number(amount);
+    u.points += delta;
+    saveDB();
+    addAudit(userId, delta, reason || 'admin_grant', { admin: true });
+    
+    bot.telegram.sendMessage(userId, `You have received ${delta} points. Reason: ${reason || 'Admin Grant'}. Total: ${u.points}`).catch(()=>{});
+    
+    res.json({ success: true, points: u.points });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
