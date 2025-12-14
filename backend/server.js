@@ -136,7 +136,7 @@ function resolvePublicBase(url, origin) {
   if (/https?:\/\/t\.me/i.test(raw)) return { base: '', error: 't.me is not a file server.' };
   return { base: raw };
 }
-const PUBLIC_BASE_INFO = resolvePublicBase(process.env.PUBLIC_URL, process.env.PUBLIC_ORIGIN);
+const PUBLIC_BASE_INFO = resolvePublicBase(process.env.PUBLIC_URL, process.env.PUBLIC_ORIGIN || process.env.RENDER_EXTERNAL_URL);
 const PUBLIC_BASE = PUBLIC_BASE_INFO.base;
 
 // --- Data Persistence (In-Memory + Disk) ---
