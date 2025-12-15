@@ -250,7 +250,7 @@ async function getFileUrl(ctx, fileId, localPath) {
             const localExt = path.extname(localPath);
             if (localExt) {
                 console.log(`Appending extension ${localExt} to URL as fragment`);
-                url += `#image${localExt}`; 
+                url += `?fake=image${localExt}`; 
             }
         }
     } catch (e) { console.error('URL parse error', e); }
