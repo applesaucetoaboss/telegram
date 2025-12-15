@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const target = path.resolve(__dirname, '../server.js');
+const target = path.resolve(__dirname, '../../../server.js');
 let code = fs.readFileSync(target, 'utf8');
 
 function replace(re, repl) { code = code.replace(re, repl); }

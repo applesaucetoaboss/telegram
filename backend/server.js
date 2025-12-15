@@ -263,6 +263,13 @@ async function getFileUrl(ctx, fileId, localPath) {
   }
 }
 
+async function ack(ctx, text) {
+  if (ctx && ctx.updateType === 'callback_query') {
+    try { await ctx.answerCbQuery(text || 'Processing…'); } catch (_) {}
+  }
+}
+
+
 async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileId, isVideo) {
   const cost = isVideo ? 9 : 9;
   const user = DB.users[u.id];
@@ -277,8 +284,7 @@ async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileI
   const targetUrl = await getFileUrl(ctx, targetFileId, targetPath);
 
   if (!swapUrl || !targetUrl) {
-    user.points += cost;
-    saveDB();
+    adjustPoints(u.id, cost, 'faceswap_refund_urls_failed', { isVideo });
     return { error: 'Failed to generate file URLs.', points: user.points };
   }
 
@@ -766,6 +772,19 @@ bot.command('debug', ctx => {
 });
 
 // --- Express App ---
+bot.on('callback_query', async (ctx) => {
+  try {
+    const d = (ctx.update && ctx.update.callback_query && ctx.update.callback_query.data) || '';
+    const known = (d === 'buy' || d === 'faceswap' || d === 'imageswap' || d === 'cancel' || /^buy:/.test(d) || /^pay:/.test(d) || /^confirm:/.test(d));
+    if (!known) {
+      await ack(ctx, 'Unsupported button');
+      await ctx.reply('That button is not recognized. Please use /start and try again.').catch(()=>{});
+    }
+  } catch (e) {
+    console.error('Callback fallback error', e);
+  }
+});
+
 const app = express();
 app.use(express.json());
 app.use('/uploads', express.static(uploadsDir));
