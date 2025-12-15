@@ -149,6 +149,7 @@ let DB = {
   purchases: {}, 
   audits: {}, 
   pending_swaps: {}, // Persistent Job Queue: requestId -> { chatId, type, startTime }
+  api_results: {}, // Store API results: requestId -> { status, output, error }
   channel: {}, 
   pending_sessions: {}, 
   pending_flows: {} 
@@ -348,10 +349,11 @@ function pollMagicResult(requestId, chatId) {
     tries++;
     // Stop after ~3 minutes (60 tries * 3s)
     if (tries > 60) {
-       bot.telegram.sendMessage(chatId, 'Task timed out. Please contact support.').catch(()=>{});
+       if (chatId) bot.telegram.sendMessage(chatId, 'Task timed out. Please contact support.').catch(()=>{});
        
-       // Cleanup DB
        if (DB.pending_swaps[requestId]) {
+          if (!DB.api_results) DB.api_results = {};
+          DB.api_results[requestId] = { status: 'failed', error: 'Timeout' };
           delete DB.pending_swaps[requestId];
           saveDB();
        }
@@ -389,11 +391,17 @@ function pollMagicResult(requestId, chatId) {
               } else {
                 await downloadTo(finalUrl, dest);
               }
+              
+              const filename = path.basename(dest);
+              if (!DB.api_results) DB.api_results = {};
+              DB.api_results[requestId] = { status: 'success', output: filename, url: \`\${PUBLIC_BASE}/outputs/\${filename}\` };
 
-              if (dest.endsWith('mp4')) await bot.telegram.sendVideo(chatId, { source: fs.createReadStream(dest) });
-              else await bot.telegram.sendPhoto(chatId, { source: fs.createReadStream(dest) });
+              if (chatId) {
+                if (dest.endsWith('mp4')) await bot.telegram.sendVideo(chatId, { source: fs.createReadStream(dest) });
+                else await bot.telegram.sendPhoto(chatId, { source: fs.createReadStream(dest) });
+              }
             } else {
-               bot.telegram.sendMessage(chatId, 'Success, but no output URL found.').catch(()=>{});
+               if (chatId) bot.telegram.sendMessage(chatId, 'Success, but no output URL found.').catch(()=>{});
             }
             
             // Cleanup on success
@@ -404,8 +412,11 @@ function pollMagicResult(requestId, chatId) {
             
           } else if (status.includes('fail') || status.includes('error')) {
             const errorMsg = j.error || j.message || j.reason || (j.details ? JSON.stringify(j.details) : status);
-            bot.telegram.sendMessage(chatId, \`Task failed: \${errorMsg}. (Refunded).\`).catch(()=>{});
+            if (chatId) bot.telegram.sendMessage(chatId, \`Task failed: \${errorMsg}. (Refunded).\`).catch(()=>{});
             console.error('Swap Failed Details:', JSON.stringify(j));
+            
+            if (!DB.api_results) DB.api_results = {};
+            DB.api_results[requestId] = { status: 'failed', error: errorMsg };
             
             // Refund points on failure
             if (job && job.userId) {
@@ -414,7 +425,7 @@ function pollMagicResult(requestId, chatId) {
               u.points += cost;
               saveDB();
               addAudit(job.userId, cost, 'refund_failed_job', { requestId, error: errorMsg });
-              bot.telegram.sendMessage(chatId, \`Refunded \${cost} points due to failure.\`).catch(()=>{});
+              if (chatId) bot.telegram.sendMessage(chatId, \`Refunded \${cost} points due to failure.\`).catch(()=>{});
             }
             // Cleanup on fail
             if (DB.pending_swaps[requestId]) {
@@ -809,15 +820,107 @@ app.post('/confirm-point-session', async (req, res) => {
 });
 
 const upload = multer();
-app.post('/faceswap', upload.single('photo'), (req, res) => {
+app.post('/faceswap', upload.fields([{ name: 'swap', maxCount: 1 }, { name: 'target', maxCount: 1 }]), async (req, res) => {
   try {
     const userId = req.body && req.body.userId;
-    if (!req.file) return res.status(400).json({ error: 'photo required' });
     if (!userId) return res.status(400).json({ error: 'user required' });
-    res.json({ ok: true });
+    
+    // Check files
+    const swapFile = req.files && req.files['swap'] ? req.files['swap'][0] : null;
+    const targetFile = req.files && req.files['target'] ? req.files['target'][0] : null;
+    
+    if (!swapFile || !targetFile) return res.status(400).json({ error: 'swap and target files required' });
+    
+    // Save files
+    const swapPath = path.join(uploadsDir, \`swap_\${userId}_\${Date.now()}.\${swapFile.originalname.split('.').pop()}\`);
+    const targetPath = path.join(uploadsDir, \`target_\${userId}_\${Date.now()}.\${targetFile.originalname.split('.').pop()}\`);
+    
+    fs.writeFileSync(swapPath, swapFile.buffer);
+    fs.writeFileSync(targetPath, targetFile.buffer);
+    
+    const isVideo = targetFile.mimetype.startsWith('video');
+    const u = getOrCreateUser(userId);
+    
+    const cost = isVideo ? 9 : 9;
+    if ((u.points || 0) < cost) return res.status(402).json({ error: 'not enough points', required: cost, points: u.points });
+    
+    u.points -= cost;
+    saveDB();
+    addAudit(u.id, -cost, 'faceswap_api', { isVideo });
+    
+    const swapUrl = \`\${PUBLIC_BASE}/uploads/\${path.basename(swapPath)}\`;
+    const targetUrl = \`\${PUBLIC_BASE}/uploads/\${path.basename(targetPath)}\`;
+    
+    // Call MagicAPI
+    const key = process.env.MAGICAPI_KEY || process.env.API_MARKET_KEY;
+    const endpoint = isVideo 
+      ? '/api/v1/magicapi/faceswap-v2/faceswap/video/run'
+      : '/api/v1/magicapi/faceswap-v2/faceswap/image/run';
+      
+    const payload = JSON.stringify({
+      input: {
+        swap_image: swapUrl,
+        [isVideo ? 'target_video' : 'target_image']: targetUrl
+      }
+    });
+    
+    const reqOpts = {
+      hostname: 'api.magicapi.dev',
+      path: endpoint,
+      method: 'POST',
+      headers: {
+        'x-magicapi-key': key,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload)
+      }
+    };
+    
+    const result = await new Promise((resolve, reject) => {
+      const r = https.request(reqOpts, res => {
+        let buf = ''; res.on('data', c => buf+=c);
+        res.on('end', () => { try { resolve(JSON.parse(buf)); } catch(e) { reject(e); } });
+      });
+      r.on('error', reject);
+      r.write(payload);
+      r.end();
+    });
+    
+    const requestId = result && (result.request_id || result.requestId || result.id);
+    if (!requestId) {
+        // Refund
+        u.points += cost;
+        saveDB();
+        return res.status(500).json({ error: 'API Error', details: result });
+    }
+    
+    if (!DB.pending_swaps) DB.pending_swaps = {};
+    DB.pending_swaps[requestId] = {
+      userId: u.id,
+      startTime: Date.now(),
+      isVideo: isVideo,
+      status: 'processing',
+      isApi: true
+    };
+    saveDB();
+    
+    pollMagicResult(requestId, null); // Start polling without chatId
+    
+    res.json({ ok: true, requestId, message: 'Job started. Poll status at /faceswap/status/' + requestId });
+    
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+app.get('/faceswap/status/:requestId', (req, res) => {
+    const rid = req.params.requestId;
+    if (DB.pending_swaps[rid]) {
+        return res.json({ status: 'processing' });
+    }
+    if (DB.api_results && DB.api_results[rid]) {
+        return res.json(DB.api_results[rid]);
+    }
+    res.status(404).json({ error: 'Job not found or expired' });
 });
 
 // Root
@@ -894,7 +997,7 @@ app.listen(PORT, async () => {
     const PREFERRED_URL = process.env.TELEGRAM_WEBHOOK_URL || (typeof PUBLIC_BASE !== 'undefined' && PUBLIC_BASE ? PUBLIC_BASE : '');
 
     if (shouldUseWebhook) {
-      const fullUrl = (process.env.TELEGRAM_WEBHOOK_URL || PREFERRED_URL).replace(/\/$/, '') + WEBHOOK_PATH;
+      const fullUrl = (process.env.TELEGRAM_WEBHOOK_URL || PREFERRED_URL).replace(/\\/$/, '') + WEBHOOK_PATH;
       console.log(\`Configuring Webhook at: \${fullUrl}\`);
       
       // Mount the webhook callback on the Express app
