@@ -1,0 +1,8 @@
+[
+  { "id": "p60", "points": 60, "usd": 3.09, "stars": 150, "tierBonus": 0.0 },
+  { "id": "p120", "points": 120, "usd": 5.09, "stars": 250, "tierBonus": 0.02 },
+  { "id": "p300", "points": 300, "usd": 9.99, "stars": 500, "tierBonus": 0.05 },
+  { "id": "p800", "points": 800, "usd": 19.99, "stars": 1000, "tierBonus": 0.08 },
+  { "id": "p1500", "points": 1500, "usd": 29.99, "stars": 1500, "tierBonus": 0.10 },
+  { "id": "p7500", "points": 7500, "usd": 99.0, "stars": 5000, "tierBonus": 0.12 }
+]
