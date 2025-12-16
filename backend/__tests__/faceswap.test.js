@@ -14,9 +14,8 @@ describe('Faceswap API', () => {
   test('faceswap missing user → 400', async () => {
     const tmp = path.join(__dirname, 'tmp_photo.jpg')
     fs.writeFileSync(tmp, Buffer.from('x'))
-    const res = await request(app).post('/faceswap').attach('photo', tmp)
+    const res = await request(app).post('/faceswap').attach('swap', tmp)
     expect(res.status).toBe(400)
     fs.unlinkSync(tmp)
   })
 })
-
