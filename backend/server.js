@@ -1,6 +1,6 @@
 require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 if (process.env.NODE_ENV !== 'test') {
-  console.log('Server script started (V4)');
+  console.log('Server script started (V5 - Cleanup & Stability)');
   console.log('Deploy tick', Date.now());
 }
 
@@ -39,6 +39,13 @@ if (!stripe) {
 }
 
 // --- Constants & Helpers ---
+function cleanupFiles(paths) {
+  if (!Array.isArray(paths)) return;
+  paths.forEach(p => {
+    try { if (p && fs.existsSync(p)) fs.unlinkSync(p); } catch(e) { console.error('Cleanup error', e); }
+  });
+}
+
 const SUPPORTED_CURRENCIES = ['usd','eur','gbp','cad','aud','jpy','cny','inr','brl','mxn'];
 const CURRENCY_DECIMALS = { usd: 2, eur: 2, gbp: 2, cad: 2, aud: 2, jpy: 0, cny: 2, inr: 2, brl: 2, rub: 2, mxn: 2 };
 
@@ -102,9 +109,11 @@ function toMinorUnits(amount, currency, rate) {
 }
 
 // --- Directories ---
+// Use os.tmpdir() for both uploads and outputs to ensure write access in serverless/readonly envs
 const uploadsDir = require('os').tmpdir();
-const outputsDir = path.join(__dirname, 'outputs');
-const dataFile = path.join(require('os').tmpdir(), 'telegram_bot_data.json'); console.log('Data File:', dataFile);
+const outputsDir = path.join(require('os').tmpdir(), 'outputs');
+const dataFile = path.join(require('os').tmpdir(), 'telegram_bot_data.json'); 
+console.log('Data File:', dataFile);
 try {
   fs.mkdirSync(uploadsDir, { recursive: true });
   fs.mkdirSync(outputsDir, { recursive: true });
@@ -250,6 +259,7 @@ async function getFileUrl(ctx, fileId, localPath) {
             const localExt = path.extname(localPath);
             if (localExt) {
                 console.log(`Appending extension ${localExt} to URL as fragment`);
+                // Use Fragment to avoid breaking download while hinting extension to API
                 url += `#image${localExt}`; 
             }
         }
@@ -274,7 +284,10 @@ async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileI
   const cost = isVideo ? 9 : 9;
   const user = DB.users[u.id];
   
-  if ((user.points || 0) < cost) return { error: 'not enough points', required: cost, points: user.points };
+  if ((user.points || 0) < cost) {
+      cleanupFiles([swapPath, targetPath]);
+      return { error: 'not enough points', required: cost, points: user.points };
+  }
   
   user.points -= cost;
   saveDB();
@@ -286,11 +299,15 @@ async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileI
   if (!swapUrl || !targetUrl) {
     user.points += cost;
     saveDB();
+    cleanupFiles([swapPath, targetPath]);
     return { error: 'Failed to generate file URLs.', points: user.points };
   }
 
   const key = process.env.MAGICAPI_KEY || process.env.API_MARKET_KEY;
-  if (!key) return { error: 'Server config error', points: user.points };
+  if (!key) {
+      cleanupFiles([swapPath, targetPath]);
+      return { error: 'Server config error', points: user.points };
+  }
 
   const endpoint = isVideo 
     ? '/api/v1/magicapi/faceswap-v2/faceswap/video/run'
@@ -338,6 +355,7 @@ async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileI
       user.points += cost;
       saveDB();
       console.error('MagicAPI Error', result);
+      cleanupFiles([swapPath, targetPath]);
       return { error: 'API Error: ' + (result.message || JSON.stringify(result)), points: user.points };
     }
 
@@ -352,6 +370,10 @@ async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileI
     };
     saveDB();
     // --- PERSISTENCE END ---
+    
+    // We can clean up input files now because API should have downloaded them?
+    // MagicAPI downloads immediately. So yes, safe to clean up inputs.
+    cleanupFiles([swapPath, targetPath]);
 
     pollMagicResult(requestId, ctx.chat.id);
     return { started: true, points: user.points, requestId };
@@ -359,6 +381,7 @@ async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileI
   } catch (e) {
     user.points += cost;
     saveDB();
+    cleanupFiles([swapPath, targetPath]);
     return { error: 'Network Error: ' + e.message, points: user.points };
   }
 }
@@ -430,6 +453,9 @@ function pollMagicResult(requestId, chatId) {
                 if (dest.endsWith('mp4')) await bot.telegram.sendVideo(chatId, { source: fs.createReadStream(dest) });
                 else await bot.telegram.sendPhoto(chatId, { source: fs.createReadStream(dest) });
               }
+              
+              // Cleanup output file after sending (delay slightly to ensure send completes)
+              setTimeout(() => cleanupFiles([dest]), 10000); // 10s delay
             } else {
                if (chatId) bot.telegram.sendMessage(chatId, 'Success, but no output URL found.').catch(()=>{});
             }
@@ -704,6 +730,7 @@ bot.on('photo', async ctx => {
     setPending(uid, null);
   } else if (p.step === 'target' && p.mode === 'faceswap') {
     ctx.reply('I need a VIDEO for the target, not a photo. Please send a video file.');
+    cleanupFiles([localPath]); // Not used, so delete
   }
 });
 
@@ -887,7 +914,10 @@ app.post('/faceswap', upload.fields([{ name: 'swap', maxCount: 1 }, { name: 'tar
     const u = getOrCreateUser(userId);
     
     const cost = isVideo ? 9 : 9;
-    if ((u.points || 0) < cost) return res.status(402).json({ error: 'not enough points', required: cost, points: u.points });
+    if ((u.points || 0) < cost) {
+         cleanupFiles([swapPath, targetPath]);
+         return res.status(402).json({ error: 'not enough points', required: cost, points: u.points });
+    }
     
     u.points -= cost;
     saveDB();
@@ -935,6 +965,7 @@ app.post('/faceswap', upload.fields([{ name: 'swap', maxCount: 1 }, { name: 'tar
         // Refund
         u.points += cost;
         saveDB();
+        cleanupFiles([swapPath, targetPath]);
         return res.status(500).json({ error: 'API Error', details: result });
     }
     
@@ -947,6 +978,7 @@ app.post('/faceswap', upload.fields([{ name: 'swap', maxCount: 1 }, { name: 'tar
       isApi: true
     };
     saveDB();
+    cleanupFiles([swapPath, targetPath]);
     
     pollMagicResult(requestId, null); // Start polling without chatId
     
