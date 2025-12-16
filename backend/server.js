@@ -1,6 +1,6 @@
 require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 if (process.env.NODE_ENV !== 'test') {
-  console.log('Server script started (V4)');
+  console.log('Server script started (V5 - Cleanup & Stability)');
   console.log('Deploy tick', Date.now());
 }
 
@@ -39,6 +39,13 @@ if (!stripe) {
 }
 
 // --- Constants & Helpers ---
+function cleanupFiles(paths) {
+  if (!Array.isArray(paths)) return;
+  paths.forEach(p => {
+    try { if (p && fs.existsSync(p)) fs.unlinkSync(p); } catch(e) { console.error('Cleanup error', e); }
+  });
+}
+
 const SUPPORTED_CURRENCIES = ['usd','eur','gbp','cad','aud','jpy','cny','inr','brl','mxn'];
 const CURRENCY_DECIMALS = { usd: 2, eur: 2, gbp: 2, cad: 2, aud: 2, jpy: 0, cny: 2, inr: 2, brl: 2, rub: 2, mxn: 2 };
 
@@ -102,9 +109,11 @@ function toMinorUnits(amount, currency, rate) {
 }
 
 // --- Directories ---
+// Use os.tmpdir() for both uploads and outputs to ensure write access in serverless/readonly envs
 const uploadsDir = require('os').tmpdir();
-const outputsDir = path.join(__dirname, 'outputs');
-const dataFile = path.join(require('os').tmpdir(), 'telegram_bot_data.json'); console.log('Data File:', dataFile);
+const outputsDir = path.join(require('os').tmpdir(), 'outputs');
+const dataFile = path.join(require('os').tmpdir(), 'telegram_bot_data.json'); 
+console.log('Data File:', dataFile);
 try {
   fs.mkdirSync(uploadsDir, { recursive: true });
   fs.mkdirSync(outputsDir, { recursive: true });
@@ -146,6 +155,7 @@ let DB = {
   purchases: {}, 
   audits: {}, 
   pending_swaps: {}, // Persistent Job Queue: requestId -> { chatId, type, startTime }
+  api_results: {}, // Store API results: requestId -> { status, output, error }
   channel: {}, 
   pending_sessions: {}, 
   pending_flows: {} 
@@ -239,19 +249,45 @@ async function getFileUrl(ctx, fileId, localPath) {
     // ALWAYS use the direct Telegram link. 
     // MagicAPI needs a public URL. Telegram file links are public (with token) and valid for 1h.
     const link = await ctx.telegram.getFileLink(fileId);
-    console.log('Using Telegram Link:', link.href);
-    return link.href;
+    let url = link.href;
+
+    // MagicAPI workaround: Append extension if missing (Telegram URLs often lack it)
+    try {
+        const urlObj = new URL(url);
+        const ext = path.extname(urlObj.pathname);
+        if (!ext || ext.length < 2) {
+            const localExt = path.extname(localPath);
+            if (localExt) {
+                console.log(`Appending extension ${localExt} to URL as fragment`);
+                // Use Fragment to avoid breaking download while hinting extension to API
+                url += `#image${localExt}`; 
+            }
+        }
+    } catch (e) { console.error('URL parse error', e); }
+
+    console.log('Using Telegram Link:', url);
+    return url;
   } catch (e) {
     console.error('Failed to get telegram file link', e);
     return null;
   }
 }
 
+async function ack(ctx, text) {
+  if (ctx && ctx.updateType === 'callback_query') {
+    try { await ctx.answerCbQuery(text || 'Processing…'); } catch (_) {}
+  }
+}
+
+
 async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileId, isVideo) {
-  const cost = isVideo ? 9 : 9;
+  const cost = isVideo ? 15 : 9;
   const user = DB.users[u.id];
   
-  if ((user.points || 0) < cost) return { error: 'not enough points', required: cost, points: user.points };
+  if ((user.points || 0) < cost) {
+      cleanupFiles([swapPath, targetPath]);
+      return { error: 'not enough points', required: cost, points: user.points };
+  }
   
   user.points -= cost;
   saveDB();
@@ -263,11 +299,15 @@ async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileI
   if (!swapUrl || !targetUrl) {
     user.points += cost;
     saveDB();
+    cleanupFiles([swapPath, targetPath]);
     return { error: 'Failed to generate file URLs.', points: user.points };
   }
 
   const key = process.env.MAGICAPI_KEY || process.env.API_MARKET_KEY;
-  if (!key) return { error: 'Server config error', points: user.points };
+  if (!key) {
+      cleanupFiles([swapPath, targetPath]);
+      return { error: 'Server config error', points: user.points };
+  }
 
   const endpoint = isVideo 
     ? '/api/v1/magicapi/faceswap-v2/faceswap/video/run'
@@ -284,6 +324,7 @@ async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileI
     hostname: 'api.magicapi.dev',
     path: endpoint,
     method: 'POST',
+    timeout: 30000, // 30s timeout
     headers: {
       'x-magicapi-key': key,
       'Content-Type': 'application/json',
@@ -301,6 +342,10 @@ async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileI
         });
       });
       r.on('error', reject);
+      r.on('timeout', () => {
+        r.destroy();
+        reject(new Error('API Request Timed Out'));
+      });
       r.write(payload);
       r.end();
     });
@@ -310,6 +355,7 @@ async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileI
       user.points += cost;
       saveDB();
       console.error('MagicAPI Error', result);
+      cleanupFiles([swapPath, targetPath]);
       return { error: 'API Error: ' + (result.message || JSON.stringify(result)), points: user.points };
     }
 
@@ -324,6 +370,10 @@ async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileI
     };
     saveDB();
     // --- PERSISTENCE END ---
+    
+    // We can clean up input files now because API should have downloaded them?
+    // MagicAPI downloads immediately. So yes, safe to clean up inputs.
+    cleanupFiles([swapPath, targetPath]);
 
     pollMagicResult(requestId, ctx.chat.id);
     return { started: true, points: user.points, requestId };
@@ -331,6 +381,7 @@ async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileI
   } catch (e) {
     user.points += cost;
     saveDB();
+    cleanupFiles([swapPath, targetPath]);
     return { error: 'Network Error: ' + e.message, points: user.points };
   }
 }
@@ -343,16 +394,22 @@ function pollMagicResult(requestId, chatId) {
   
   const poll = () => {
     tries++;
-    // Stop after ~3 minutes (60 tries * 3s)
-    if (tries > 60) {
-       bot.telegram.sendMessage(chatId, 'Task timed out. Please contact support.').catch(()=>{});
+    // Stop after ~5 minutes (100 tries * 3s)
+    if (tries > 100) {
+       if (chatId) bot.telegram.sendMessage(chatId, 'Task timed out. Please contact support.').catch(()=>{});
        
-       // Cleanup DB
        if (DB.pending_swaps[requestId]) {
+          if (!DB.api_results) DB.api_results = {};
+          DB.api_results[requestId] = { status: 'failed', error: 'Timeout' };
           delete DB.pending_swaps[requestId];
           saveDB();
        }
        return;
+    }
+
+    // Notify user every 30 seconds (every 10 tries)
+    if (tries % 10 === 0 && chatId) {
+        bot.telegram.sendMessage(chatId, `Still processing... (${tries * 3}s elapsed)`).catch(()=>{});
     }
 
     const typePath = isVideo ? 'video' : 'image';
@@ -360,6 +417,7 @@ function pollMagicResult(requestId, chatId) {
       hostname: 'api.magicapi.dev',
       path: `/api/v1/magicapi/faceswap-v2/faceswap/${typePath}/status/${requestId}`,
       method: 'GET',
+      timeout: 10000, // 10s timeout
       headers: { 'x-magicapi-key': key, 'Content-Type': 'application/json' }
     }, res => {
       let buf=''; res.on('data', c=>buf+=c); res.on('end', async () => {
@@ -386,11 +444,20 @@ function pollMagicResult(requestId, chatId) {
               } else {
                 await downloadTo(finalUrl, dest);
               }
+              
+              const filename = path.basename(dest);
+              if (!DB.api_results) DB.api_results = {};
+              DB.api_results[requestId] = { status: 'success', output: filename, url: `${PUBLIC_BASE}/outputs/${filename}` };
 
-              if (dest.endsWith('mp4')) await bot.telegram.sendVideo(chatId, { source: fs.createReadStream(dest) });
-              else await bot.telegram.sendPhoto(chatId, { source: fs.createReadStream(dest) });
+              if (chatId) {
+                if (dest.endsWith('mp4')) await bot.telegram.sendVideo(chatId, { source: fs.createReadStream(dest) });
+                else await bot.telegram.sendPhoto(chatId, { source: fs.createReadStream(dest) });
+              }
+              
+              // Cleanup output file after sending (delay slightly to ensure send completes)
+              setTimeout(() => cleanupFiles([dest]), 10000); // 10s delay
             } else {
-               bot.telegram.sendMessage(chatId, 'Success, but no output URL found.').catch(()=>{});
+               if (chatId) bot.telegram.sendMessage(chatId, 'Success, but no output URL found.').catch(()=>{});
             }
             
             // Cleanup on success
@@ -400,18 +467,22 @@ function pollMagicResult(requestId, chatId) {
             }
             
           } else if (status.includes('fail') || status.includes('error')) {
-            const errorMsg = j.error || j.message || j.reason || (j.details ? JSON.stringify(j.details) : status);
-            bot.telegram.sendMessage(chatId, `Task failed: ${errorMsg}. (Refunded).`).catch(()=>{});
-            console.error('Swap Failed Details:', JSON.stringify(j));
+            const rawError = JSON.stringify(j);
+            const errorMsg = j.error || j.message || j.reason || (j.details ? JSON.stringify(j.details) : `Status: ${status}`);
+            if (chatId) bot.telegram.sendMessage(chatId, `Task failed: ${errorMsg}. (Refunded).\nDebug: ${rawError.substring(0, 200)}`).catch(()=>{});
+            console.error('Swap Failed Details:', rawError);
+            
+            if (!DB.api_results) DB.api_results = {};
+            DB.api_results[requestId] = { status: 'failed', error: errorMsg };
             
             // Refund points on failure
             if (job && job.userId) {
               const u = getOrCreateUser(job.userId);
-              const cost = job.isVideo ? 9 : 9; 
+              const cost = job.isVideo ? 15 : 9; 
               u.points += cost;
               saveDB();
               addAudit(job.userId, cost, 'refund_failed_job', { requestId, error: errorMsg });
-              bot.telegram.sendMessage(chatId, `Refunded ${cost} points due to failure.`).catch(()=>{});
+              if (chatId) bot.telegram.sendMessage(chatId, `Refunded ${cost} points due to failure.`).catch(()=>{});
             }
             // Cleanup on fail
             if (DB.pending_swaps[requestId]) {
@@ -427,6 +498,7 @@ function pollMagicResult(requestId, chatId) {
       });
     });
     req.on('error', () => setTimeout(poll, 3000));
+    req.on('timeout', () => { req.destroy(); setTimeout(poll, 3000); });
     req.end();
   };
   
@@ -441,9 +513,11 @@ setTimeout(() => {
     console.log(`Recovering ${pendingIds.length} pending swaps...`);
     pendingIds.forEach(rid => {
       const job = DB.pending_swaps[rid];
-      if (job && job.chatId) {
-        console.log(`Resuming poll for job ${rid} (Chat ${job.chatId})`);
-        pollMagicResult(rid, job.chatId);
+      if (job) {
+        // Recover all jobs - API jobs have no chatId but should still be polled
+        const chatId = job.chatId || null;
+        console.log(`Resuming poll for job ${rid} (${job.isApi ? 'API' : 'Chat ' + chatId})`);
+        pollMagicResult(rid, chatId);
       }
     });
   }
@@ -590,10 +664,12 @@ bot.on('photo', async ctx => {
   
   // --- STATELESS FLOW CHECK ---
   const replyText = (ctx.message.reply_to_message && ctx.message.reply_to_message.text) || '';
+  let orphanedFilePath = null; // Track file path for cleanup if needed
   if (replyText) {
     const fileId = ctx.message.photo[ctx.message.photo.length-1].file_id;
     const link = await ctx.telegram.getFileLink(fileId);
     const localPath = path.join(uploadsDir, `photo_${uid}_${Date.now()}.jpg`);
+    orphanedFilePath = localPath; // Track for potential cleanup
     await downloadTo(link.href, localPath);
 
     if (replyText.includes('for VIDEO Face Swap')) {
@@ -622,10 +698,12 @@ bot.on('photo', async ctx => {
            return;
         }
     }
+    // Clean up the file downloaded in replyText block since it wasn't used
+    cleanupFiles([orphanedFilePath]);
+    orphanedFilePath = null; // Clear since we've cleaned it up
   }
   // --- END STATELESS FLOW ---
   const p = getPending(uid);
-  
   if (!p) {
     return ctx.reply(
       '⚠️ **Action Required**\n\nTo perform a Face Swap, you must:\n1. Select a mode below.\n2. When asked, **REPLY** to the bot\'s message with your photo.\n\n(Simply sending a photo without replying will not work).', 
@@ -658,6 +736,7 @@ bot.on('photo', async ctx => {
     setPending(uid, null);
   } else if (p.step === 'target' && p.mode === 'faceswap') {
     ctx.reply('I need a VIDEO for the target, not a photo. Please send a video file.');
+    cleanupFiles([localPath]); // Not used, so delete
   }
 });
 
@@ -728,6 +807,19 @@ bot.command('debug', ctx => {
 });
 
 // --- Express App ---
+bot.on('callback_query', async (ctx) => {
+  try {
+    const d = (ctx.update && ctx.update.callback_query && ctx.update.callback_query.data) || '';
+    const known = (d === 'buy' || d === 'faceswap' || d === 'imageswap' || d === 'cancel' || /^buy:/.test(d) || /^pay:/.test(d) || /^confirm:/.test(d));
+    if (!known) {
+      await ack(ctx, 'Unsupported button');
+      await ctx.reply('That button is not recognized. Please use /start and try again.').catch(()=>{});
+    }
+  } catch (e) {
+    console.error('Callback fallback error', e);
+  }
+});
+
 const app = express();
 app.use(express.json());
 app.use('/uploads', express.static(uploadsDir));
@@ -806,15 +898,112 @@ app.post('/confirm-point-session', async (req, res) => {
 });
 
 const upload = multer();
-app.post('/faceswap', upload.single('photo'), (req, res) => {
+app.post('/faceswap', upload.fields([{ name: 'swap', maxCount: 1 }, { name: 'target', maxCount: 1 }]), async (req, res) => {
   try {
     const userId = req.body && req.body.userId;
-    if (!req.file) return res.status(400).json({ error: 'photo required' });
     if (!userId) return res.status(400).json({ error: 'user required' });
-    res.json({ ok: true });
+    
+    // Check files
+    const swapFile = req.files && req.files['swap'] ? req.files['swap'][0] : null;
+    const targetFile = req.files && req.files['target'] ? req.files['target'][0] : null;
+    
+    if (!swapFile || !targetFile) return res.status(400).json({ error: 'swap and target files required' });
+    
+    // Save files
+    const swapPath = path.join(uploadsDir, `swap_${userId}_${Date.now()}.${swapFile.originalname.split('.').pop()}`);
+    const targetPath = path.join(uploadsDir, `target_${userId}_${Date.now()}.${targetFile.originalname.split('.').pop()}`);
+    
+    fs.writeFileSync(swapPath, swapFile.buffer);
+    fs.writeFileSync(targetPath, targetFile.buffer);
+    
+    const isVideo = targetFile.mimetype.startsWith('video');
+    const u = getOrCreateUser(userId);
+    
+    const cost = isVideo ? 15 : 9;
+    if ((u.points || 0) < cost) {
+         cleanupFiles([swapPath, targetPath]);
+         return res.status(402).json({ error: 'not enough points', required: cost, points: u.points });
+    }
+    
+    u.points -= cost;
+    saveDB();
+    addAudit(u.id, -cost, 'faceswap_api', { isVideo });
+    
+    const swapUrl = `${PUBLIC_BASE}/uploads/${path.basename(swapPath)}`;
+    const targetUrl = `${PUBLIC_BASE}/uploads/${path.basename(targetPath)}`;
+    
+    // Call MagicAPI
+    const key = process.env.MAGICAPI_KEY || process.env.API_MARKET_KEY;
+    const endpoint = isVideo 
+      ? '/api/v1/magicapi/faceswap-v2/faceswap/video/run'
+      : '/api/v1/magicapi/faceswap-v2/faceswap/image/run';
+      
+    const payload = JSON.stringify({
+      input: {
+        swap_image: swapUrl,
+        [isVideo ? 'target_video' : 'target_image']: targetUrl
+      }
+    });
+    
+    const reqOpts = {
+      hostname: 'api.magicapi.dev',
+      path: endpoint,
+      method: 'POST',
+      headers: {
+        'x-magicapi-key': key,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload)
+      }
+    };
+    
+    const result = await new Promise((resolve, reject) => {
+      const r = https.request(reqOpts, res => {
+        let buf = ''; res.on('data', c => buf+=c);
+        res.on('end', () => { try { resolve(JSON.parse(buf)); } catch(e) { reject(e); } });
+      });
+      r.on('error', reject);
+      r.write(payload);
+      r.end();
+    });
+    
+    const requestId = result && (result.request_id || result.requestId || result.id);
+    if (!requestId) {
+        // Refund
+        u.points += cost;
+        saveDB();
+        cleanupFiles([swapPath, targetPath]);
+        return res.status(500).json({ error: 'API Error', details: result });
+    }
+    
+    if (!DB.pending_swaps) DB.pending_swaps = {};
+    DB.pending_swaps[requestId] = {
+      userId: u.id,
+      startTime: Date.now(),
+      isVideo: isVideo,
+      status: 'processing',
+      isApi: true
+    };
+    saveDB();
+    cleanupFiles([swapPath, targetPath]);
+    
+    pollMagicResult(requestId, null); // Start polling without chatId
+    
+    res.json({ ok: true, requestId, message: 'Job started. Poll status at /faceswap/status/' + requestId });
+    
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+app.get('/faceswap/status/:requestId', (req, res) => {
+    const rid = req.params.requestId;
+    if (DB.pending_swaps[rid]) {
+        return res.json({ status: 'processing' });
+    }
+    if (DB.api_results && DB.api_results[rid]) {
+        return res.json(DB.api_results[rid]);
+    }
+    res.status(404).json({ error: 'Job not found or expired' });
 });
 
 // Root
@@ -844,8 +1033,8 @@ app.get('/debug-bot', async (req, res) => {
 app.post('/admin/grant-points', (req, res) => {
   try {
     const { userId, amount, reason, secret } = req.body;
-    // Simple secret check
-    if (secret !== process.env.ADMIN_SECRET && secret !== 'admin123') { 
+    // Security: Only allow ADMIN_SECRET from environment, no hardcoded fallback
+    if (!process.env.ADMIN_SECRET || secret !== process.env.ADMIN_SECRET) { 
         return res.status(403).json({ error: 'Forbidden' });
     }
     if (!userId || !amount) return res.status(400).json({ error: 'Missing userId or amount' });
@@ -891,7 +1080,7 @@ app.listen(PORT, async () => {
     const PREFERRED_URL = process.env.TELEGRAM_WEBHOOK_URL || (typeof PUBLIC_BASE !== 'undefined' && PUBLIC_BASE ? PUBLIC_BASE : '');
 
     if (shouldUseWebhook) {
-      const fullUrl = (process.env.TELEGRAM_WEBHOOK_URL || PREFERRED_URL).replace(//$/, '') + WEBHOOK_PATH;
+      const fullUrl = (process.env.TELEGRAM_WEBHOOK_URL || PREFERRED_URL).replace(/\/$/, '') + WEBHOOK_PATH;
       console.log(`Configuring Webhook at: ${fullUrl}`);
       
       // Mount the webhook callback on the Express app
