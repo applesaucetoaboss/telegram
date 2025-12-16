@@ -1,0 +1,606 @@
+const fs = require('fs');
+const path = require('path');
+
+const serverCode = `require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+if (process.env.NODE_ENV !== 'test') {
+  console.log('Server script started');
+  console.log('Deploy tick', Date.now());
+}
+const fs = require('fs');
+const path = require('path');
+const express = require('express');
+const multer = require('multer');
+const ffmpeg = require('fluent-ffmpeg');
+const ffmpegPath = require('ffmpeg-static');
+const ffprobePath = require('ffprobe-static');
+const https = require('https');
+const querystring = require('querystring');
+
+// --- Configuration & Setup ---
+if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
+if (ffprobePath && ffprobePath.path) ffmpeg.setFfprobePath(ffprobePath.path);
+
+const stripeSecretKey = process.env.STRIPE_SECRET_KEY || '';
+let stripe = global.__stripe || null;
+if (!stripe) {
+  if (stripeSecretKey) {
+    stripe = require('stripe')(stripeSecretKey);
+  } else {
+    try { console.warn('Missing STRIPE_SECRET_KEY. Stripe payments disabled.'); } catch (_) {}
+  }
+}
+
+// --- Constants & Helpers ---
+const SUPPORTED_CURRENCIES = ['usd','eur','gbp','cad','aud','jpy','cny','inr','brl','mxn'];
+const CURRENCY_DECIMALS = { usd: 2, eur: 2, gbp: 2, cad: 2, aud: 2, jpy: 0, cny: 2, inr: 2, brl: 2, rub: 2, mxn: 2 };
+
+// Safe fallback rates
+const SAFE_RATES = { 
+  EUR: 0.92, GBP: 0.79, CAD: 1.36, AUD: 1.52, JPY: 148.0, 
+  CNY: 7.2, INR: 83.0, BRL: 5.0, RUB: 92.0, MXN: 17.0
+};
+
+function formatCurrency(amount, currency = 'usd') {
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);
+  } catch (e) {
+    return \`\${currency.toUpperCase()} \${Number(amount).toFixed(2)}\`;
+  }
+}
+
+function formatUSD(amount) {
+  return formatCurrency(amount, 'usd');
+}
+
+async function fetchUsdRate(to) {
+  return await new Promise((resolve) => {
+    try {
+      const symbol = String(to || '').toUpperCase();
+      if (symbol === 'USD') return resolve(1);
+      
+      const req = https.request({ 
+        hostname: 'api.exchangerate-api.com', 
+        path: \`/v4/latest/USD\`, 
+        method: 'GET',
+        timeout: 4000 
+      }, res => {
+        let buf=''; 
+        res.on('data', c => buf+=c); 
+        res.on('end', () => {
+          try { 
+            const j = JSON.parse(buf); 
+            const rate = j && j.rates && j.rates[symbol]; 
+            if (typeof rate === 'number') resolve(rate);
+            else resolve(SAFE_RATES[symbol] || 1);
+          }
+          catch (_) { resolve(SAFE_RATES[symbol] || 1); }
+        });
+      });
+      req.on('error', () => resolve(SAFE_RATES[symbol] || 1));
+      req.on('timeout', () => { req.destroy(); resolve(SAFE_RATES[symbol] || 1); });
+      req.end();
+    } catch (_) { resolve(SAFE_RATES[symbol] || 1); }
+  });
+}
+
+function toMinorUnits(amount, currency, rate) {
+  const dec = CURRENCY_DECIMALS[currency.toLowerCase()] ?? 2;
+  let val = Number(amount) * Number(rate || 1);
+  if (currency.toLowerCase() !== 'usd') {
+    val = val * 1.03; // 3% spread for FX safety
+  }
+  if (dec === 0) return Math.round(val);
+  return Math.round(val * Math.pow(10, dec));
+}
+
+// --- Directories ---
+const uploadsDir = path.join(__dirname, 'uploads');
+const outputsDir = path.join(__dirname, 'outputs');
+const dataFile = path.join(__dirname, 'data.json');
+try {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  fs.mkdirSync(outputsDir, { recursive: true });
+} catch (e) { console.error('Directory init error:', e); }
+
+// --- Pricing ---
+let PRICING = [
+  { id: 'p60', points: 60, usd: 3.09, stars: 150 },
+  { id: 'p120', points: 120, usd: 5.09, stars: 250 },
+  { id: 'p300', points: 300, usd: 9.99, stars: 500 },
+  { id: 'p800', points: 800, usd: 19.99, stars: 1000 },
+  { id: 'p1500', points: 1500, usd: 29.99, stars: 1500 },
+  { id: 'p7500', points: 7500, usd: 99.0, stars: 5000 },
+];
+try {
+  const pricingFile = path.join(__dirname, 'pricing.json');
+  if (fs.existsSync(pricingFile)) {
+    const raw = fs.readFileSync(pricingFile, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) PRICING = parsed;
+  }
+} catch (_) {}
+
+// --- Public URL Logic ---
+function resolvePublicBase(url, origin) {
+  const raw = String(url || origin || '').trim().replace(/^['"\`]+|['"\`]+$/g, '').replace(/\\/+$/, '');
+  if (!raw) return { base: '', error: 'Public URL not set.' };
+  if (/https?:\\/\\/(?:localhost|127\\.0\\.0\\.1)/i.test(raw)) return { base: '', error: 'Localhost not supported for external webhooks.' };
+  if (/https?:\\/\\/t\\.me/i.test(raw)) return { base: '', error: 't.me is not a file server.' };
+  return { base: raw };
+}
+const PUBLIC_BASE_INFO = resolvePublicBase(process.env.PUBLIC_URL, process.env.PUBLIC_ORIGIN);
+const PUBLIC_BASE = PUBLIC_BASE_INFO.base;
+
+// --- Data Persistence (In-Memory + Disk) ---
+// Global DB to ensure state is consistent even if disk write lags
+let DB = { users: {}, purchases: {}, audits: {}, pending_swaps: {}, channel: {}, pending_sessions: {}, pending_flows: {} };
+
+function initDB() {
+  try {
+    if (fs.existsSync(dataFile)) {
+      const raw = fs.readFileSync(dataFile, 'utf8');
+      const loaded = JSON.parse(raw);
+      DB = { ...DB, ...loaded };
+      console.log('DB Loaded. Pending flows:', Object.keys(DB.pending_flows || {}).length);
+    }
+  } catch (e) {
+    console.error('DB Load Error:', e);
+  }
+}
+initDB();
+
+function saveDB() {
+  try {
+    // Write SYNC to ensure data is safe before proceeding
+    fs.writeFileSync(dataFile, JSON.stringify(DB, null, 2));
+  } catch (e) { console.error('DB Save Trigger Error:', e); }
+}
+
+function getPending(uid) {
+  return (DB.pending_flows || {})[uid];
+}
+function setPending(uid, val) {
+  if (!DB.pending_flows) DB.pending_flows = {};
+  if (val) {
+    DB.pending_flows[uid] = val;
+    console.log('SetPending', uid, val);
+  } else {
+    delete DB.pending_flows[uid];
+    console.log('ClearPending', uid);
+  }
+  saveDB();
+}
+
+function getOrCreateUser(id, fields) {
+  let u = DB.users[id];
+  if (!u) {
+    u = { id, points: 10, created_at: Date.now() }; 
+    DB.users[id] = u;
+    saveDB();
+  }
+  if (fields) { Object.assign(u, fields); saveDB(); }
+  return u;
+}
+function addAudit(userId, delta, reason, meta) {
+  if (!DB.audits) DB.audits = {};
+  DB.audits[userId] = DB.audits[userId] || [];
+  DB.audits[userId].push({ at: Date.now(), delta, reason, meta });
+  saveDB();
+}
+
+// --- Telegram Bot ---
+const { Telegraf, Markup } = require('telegraf');
+const bot = new Telegraf(process.env.BOT_TOKEN || '');
+
+bot.use(async (ctx, next) => {
+  try { console.log('update', ctx.updateType, (ctx.from && ctx.from.id)); } catch (_) {}
+  return next();
+});
+
+bot.catch((err, ctx) => {
+  console.error('Bot Error:', err);
+  if (ctx && ctx.chat) {
+    ctx.reply('Oops, something went wrong. Please try again or use /start.').catch(()=>{});
+  }
+});
+
+async function downloadTo(url, dest) {
+  return new Promise((resolve, reject) => {
+    const proto = url.startsWith('https') ? https : require('http');
+    const file = fs.createWriteStream(dest);
+    proto.get(url, res => {
+      res.pipe(file);
+      file.on('finish', () => { file.close(); resolve(dest); });
+    }).on('error', err => {
+      fs.unlink(dest, () => reject(err));
+    });
+  });
+}
+
+// --- MagicAPI Integration ---
+async function getFileUrl(ctx, fileId, localPath) {
+  if (PUBLIC_BASE) return \`\${PUBLIC_BASE}/uploads/\${path.basename(localPath)}\`;
+  try {
+    const link = await ctx.telegram.getFileLink(fileId);
+    return link.href;
+  } catch (e) {
+    console.error('Failed to get telegram link', e);
+    return null;
+  }
+}
+
+async function runFaceswap(ctx, u, swapPath, targetPath, swapFileId, targetFileId, isVideo) {
+  const cost = isVideo ? 9 : 9;
+  const user = DB.users[u.id];
+  
+  if ((user.points || 0) < cost) return { error: 'not enough points', required: cost, points: user.points };
+  
+  user.points -= cost;
+  saveDB();
+  addAudit(u.id, -cost, 'faceswap_start', { isVideo });
+
+  const swapUrl = await getFileUrl(ctx, swapFileId, swapPath);
+  const targetUrl = await getFileUrl(ctx, targetFileId, targetPath);
+
+  if (!swapUrl || !targetUrl) {
+    user.points += cost;
+    saveDB();
+    return { error: 'Failed to generate file URLs.', points: user.points };
+  }
+
+  const key = process.env.MAGICAPI_KEY || process.env.API_MARKET_KEY;
+  if (!key) return { error: 'Server config error', points: user.points };
+
+  const endpoint = isVideo 
+    ? '/api/v1/capix/faceswap/faceswap/v1/video'
+    : '/api/v1/capix/faceswap/faceswap/v1/image';
+  
+  const form = querystring.stringify({ target_url: targetUrl, swap_url: swapUrl });
+  const reqOpts = {
+    hostname: 'api.magicapi.dev',
+    path: endpoint,
+    method: 'POST',
+    headers: {
+      'x-magicapi-key': key,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Content-Length': Buffer.byteLength(form)
+    }
+  };
+
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const r = https.request(reqOpts, res => {
+        let buf = '';
+        res.on('data', c => buf+=c);
+        res.on('end', () => {
+          try { resolve(JSON.parse(buf)); } catch(e) { reject(e); }
+        });
+      });
+      r.on('error', reject);
+      r.write(form);
+      r.end();
+    });
+
+    const requestId = result && (result.request_id || result.requestId || result.id);
+    if (!requestId) {
+      user.points += cost;
+      saveDB();
+      console.error('MagicAPI Error', result);
+      return { error: 'API Error: ' + (result.message || JSON.stringify(result)), points: user.points };
+    }
+
+    pollMagicResult(requestId, ctx.chat.id);
+    return { started: true, points: user.points, requestId };
+
+  } catch (e) {
+    user.points += cost;
+    saveDB();
+    return { error: 'Network Error: ' + e.message, points: user.points };
+  }
+}
+
+function pollMagicResult(requestId, chatId) {
+  let tries = 0;
+  const key = process.env.MAGICAPI_KEY || process.env.API_MARKET_KEY;
+  
+  const poll = () => {
+    tries++;
+    if (tries > 60) {
+       bot.telegram.sendMessage(chatId, 'Task timed out. Points refunded.').catch(()=>{});
+       return;
+    }
+
+    const form = querystring.stringify({ request_id: requestId });
+    const req = https.request({
+      hostname: 'api.magicapi.dev',
+      path: '/api/v1/capix/faceswap/result/',
+      method: 'POST',
+      headers: { 'x-magicapi-key': key, 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(form) }
+    }, res => {
+      let buf=''; res.on('data', c=>buf+=c); res.on('end', async () => {
+        try {
+          const j = JSON.parse(buf);
+          const status = (j.status || j.state || '').toLowerCase();
+          
+          if (status.includes('success') || status.includes('done')) {
+            const outUrl = j.output || j.result || j.url || j.image_url || j.video_url;
+            const finalUrl = Array.isArray(outUrl) ? outUrl[outUrl.length-1] : outUrl;
+            
+            if (finalUrl) {
+              const dest = path.join(outputsDir, \`result_\${Date.now()}.\${finalUrl.split('.').pop() || 'dat'}\`);
+              await downloadTo(finalUrl, dest);
+              if (dest.endsWith('mp4')) await bot.telegram.sendVideo(chatId, { source: fs.createReadStream(dest) });
+              else await bot.telegram.sendPhoto(chatId, { source: fs.createReadStream(dest) });
+            } else {
+               bot.telegram.sendMessage(chatId, 'Success, but no output URL found.').catch(()=>{});
+            }
+          } else if (status.includes('fail') || status.includes('error')) {
+            bot.telegram.sendMessage(chatId, \`Task failed: \${j.error || status}\`).catch(()=>{});
+          } else {
+            setTimeout(poll, 3000);
+          }
+        } catch (e) { setTimeout(poll, 3000); }
+      });
+    });
+    req.on('error', () => setTimeout(poll, 3000));
+    req.write(form);
+    req.end();
+  };
+  setTimeout(poll, 2000);
+}
+
+// --- Bot Logic ---
+bot.command('start', ctx => {
+  const u = getOrCreateUser(String(ctx.from.id));
+  ctx.reply(\`Welcome! You have \${u.points} points.\\nUse /faceswap to start.\`, 
+    Markup.inlineKeyboard([
+      [Markup.button.callback('Video Face Swap', 'faceswap'), Markup.button.callback('Image Face Swap', 'imageswap')],
+      [Markup.button.callback('Buy Points', 'buy')]
+    ])
+  );
+});
+
+bot.action('buy', async ctx => {
+  try {
+    const u = getOrCreateUser(String(ctx.from.id));
+    const rows = PRICING.map(p => [Markup.button.callback(\`\${p.points} Pts - \${formatUSD(p.usd)}\`, \`buy:\${p.id}\`)]);
+    await ctx.reply('Select a package:', Markup.inlineKeyboard(rows));
+  } catch(e) { console.error(e); }
+});
+
+bot.action(/buy:(.+)/, async ctx => {
+  try {
+    const tierId = ctx.match[1];
+    const tier = PRICING.find(t => t.id === tierId);
+    if (!tier) return ctx.reply('Invalid tier');
+    
+    const k = Markup.inlineKeyboard([
+      [Markup.button.callback('USD', \`pay:usd:\${tierId}\`), Markup.button.callback('EUR', \`pay:eur:\${tierId}\`)],
+      [Markup.button.callback('GBP', \`pay:gbp:\${tierId}\`), Markup.button.callback('MXN', \`pay:mxn:\${tierId}\`)],
+      [Markup.button.callback('JPY', \`pay:jpy:\${tierId}\`), Markup.button.callback('Cancel', 'cancel')]
+    ]);
+    ctx.reply(\`Selected: \${tier.points} Points.\\nChoose currency:\`, k);
+  } catch(e) { console.error(e); }
+});
+
+bot.action('cancel', ctx => {
+  ctx.deleteMessage().catch(()=>{});
+  ctx.reply('Cancelled.');
+});
+
+bot.action(/pay:(\\w+):(.+)/, async ctx => {
+  if (!stripe) return ctx.reply('Payments unavailable.');
+  const curr = ctx.match[1];
+  const tierId = ctx.match[2];
+  const tier = PRICING.find(t => t.id === tierId);
+  
+  try {
+    const rate = await fetchUsdRate(curr);
+    const amount = toMinorUnits(tier.usd, curr, rate);
+    const origin = PUBLIC_BASE || 'https://stripe.com';
+    
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: [{
+        price_data: {
+          currency: curr,
+          product_data: { name: \`\${tier.points} Credits\` },
+          unit_amount: amount
+        },
+        quantity: 1
+      }],
+      mode: 'payment',
+      success_url: \`\${origin}/success?session_id={CHECKOUT_SESSION_ID}\`,
+      cancel_url: \`\${origin}/cancel\`,
+      metadata: { userId: String(ctx.from.id), tierId: tier.id, points: tier.points }
+    });
+    
+    const shortId = Math.random().toString(36).substring(2, 10);
+    if (!DB.pending_sessions) DB.pending_sessions = {};
+    DB.pending_sessions[shortId] = session.id;
+    saveDB();
+    
+    ctx.reply(\`Pay \${formatCurrency(amount/100, curr)} for \${tier.points} points.\`, 
+      Markup.inlineKeyboard([
+        [Markup.button.url('Pay Now', session.url)],
+        [Markup.button.callback('I have paid', \`confirm:\${shortId}\`)]
+      ])
+    );
+  } catch (e) {
+    console.error(e);
+    ctx.reply('Error creating payment: ' + e.message);
+  }
+});
+
+bot.action(/confirm:(.+)/, async ctx => {
+  const shortId = ctx.match[1];
+  if (!stripe) return;
+  
+  try {
+    const sid = (DB.pending_sessions || {})[shortId];
+    if (!sid) return ctx.reply('Payment link expired or invalid.');
+    
+    const s = await stripe.checkout.sessions.retrieve(sid);
+    if (s.payment_status === 'paid') {
+      if (DB.purchases[sid]) return ctx.reply('Already credited.');
+      
+      const uid = s.metadata.userId;
+      const pts = Number(s.metadata.points);
+      const u = getOrCreateUser(uid);
+      
+      u.points += pts;
+      DB.purchases[sid] = true;
+      saveDB();
+      ctx.reply(\`Success! Added \${pts} points. Total: \${u.points}\`);
+    } else {
+      ctx.reply('Payment not yet confirmed. Try again in a moment.');
+    }
+  } catch (e) { ctx.reply('Error: ' + e.message); }
+});
+
+bot.command('faceswap', ctx => {
+  setPending(String(ctx.from.id), { mode: 'faceswap', step: 'swap' });
+  ctx.reply('Send the SWAP photo (the face you want to use).');
+});
+bot.action('faceswap', ctx => {
+  setPending(String(ctx.from.id), { mode: 'faceswap', step: 'swap' });
+  ctx.reply('Send the SWAP photo (the face you want to use).');
+});
+
+bot.command('imageswap', ctx => {
+  setPending(String(ctx.from.id), { mode: 'imageswap', step: 'swap' });
+  ctx.reply('Send the SWAP photo (the face you want to use).');
+});
+bot.action('imageswap', ctx => {
+  setPending(String(ctx.from.id), { mode: 'imageswap', step: 'swap' });
+  ctx.reply('Send the SWAP photo (the face you want to use).');
+});
+
+bot.on('photo', async ctx => {
+  const uid = String(ctx.from.id);
+  const p = getPending(uid);
+  
+  if (!p) {
+    return ctx.reply('Please select a mode (Video/Image Swap) from the menu first.', 
+      Markup.inlineKeyboard([
+        [Markup.button.callback('Video Face Swap', 'faceswap'), Markup.button.callback('Image Face Swap', 'imageswap')]
+      ])
+    );
+  }
+
+  const fileId = ctx.message.photo[ctx.message.photo.length-1].file_id;
+  const link = await ctx.telegram.getFileLink(fileId);
+  const localPath = path.join(uploadsDir, \`photo_\${uid}_\${Date.now()}.jpg\`);
+  await downloadTo(link.href, localPath);
+
+  if (p.step === 'swap') {
+    p.swapPath = localPath;
+    p.swapFileId = fileId;
+    p.step = 'target';
+    setPending(uid, p);
+    ctx.reply(p.mode === 'faceswap' ? 'Great! Now send the TARGET video.' : 'Great! Now send the TARGET photo.');
+  } else if (p.step === 'target' && p.mode === 'imageswap') {
+    p.targetPath = localPath;
+    p.targetFileId = fileId;
+    
+    ctx.reply('Processing Image Swap...');
+    const res = await runFaceswap(ctx, getOrCreateUser(uid), p.swapPath, p.targetPath, p.swapFileId, p.targetFileId, false);
+    if (res.error) ctx.reply(res.error);
+    else ctx.reply('Job started! ID: ' + res.requestId);
+    
+    setPending(uid, null);
+  } else if (p.step === 'target' && p.mode === 'faceswap') {
+    // Explicitly handle user sending photo instead of video
+    ctx.reply('I need a VIDEO for the target, not a photo. Please send a video file.');
+  }
+});
+
+bot.on('video', async ctx => {
+  const uid = String(ctx.from.id);
+  const p = getPending(uid);
+  if (!p) {
+    return ctx.reply('Please select a mode (Video/Image Swap) from the menu first.',
+      Markup.inlineKeyboard([
+        [Markup.button.callback('Video Face Swap', 'faceswap'), Markup.button.callback('Image Face Swap', 'imageswap')]
+      ])
+    );
+  }
+  
+  if (p.mode !== 'faceswap' || p.step !== 'target') {
+    return ctx.reply('Unexpected video. Are you in the right mode?');
+  }
+
+  const fileId = ctx.message.video.file_id;
+  const link = await ctx.telegram.getFileLink(fileId);
+  const localPath = path.join(uploadsDir, \`video_\${uid}_\${Date.now()}.mp4\`);
+  await downloadTo(link.href, localPath);
+
+  p.targetPath = localPath;
+  p.targetFileId = fileId;
+
+  ctx.reply('Processing Video Swap...');
+  const res = await runFaceswap(ctx, getOrCreateUser(uid), p.swapPath, p.targetPath, p.swapFileId, p.targetFileId, true);
+  if (res.error) ctx.reply(res.error);
+  else ctx.reply('Job started! ID: ' + res.requestId);
+  
+  setPending(uid, null);
+});
+
+bot.command('reset', ctx => {
+  setPending(String(ctx.from.id), null);
+  ctx.reply('State reset. Use /faceswap to start over.');
+});
+
+bot.command('debug', ctx => {
+  const p = getPending(String(ctx.from.id));
+  ctx.reply('Current State: ' + JSON.stringify(p || 'None'));
+});
+
+// --- Express App ---
+const app = express();
+app.use(express.json());
+app.use('/uploads', express.static(uploadsDir));
+app.use('/outputs', express.static(outputsDir));
+
+// Webhook for Stripe
+app.post('/stripe/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  try {
+    const event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    if (event.type === 'checkout.session.completed') {
+      const s = event.data.object;
+      const uid = s.metadata.userId;
+      const pts = Number(s.metadata.points);
+      
+      if (!DB.purchases[s.id]) {
+        const u = getOrCreateUser(uid);
+        u.points += pts;
+        DB.purchases[s.id] = true;
+        saveDB();
+        bot.telegram.sendMessage(uid, \`Payment successful! Added \${pts} points.\`).catch(()=>{});
+      }
+    }
+    res.json({ received: true });
+  } catch (err) {
+    res.status(400).send(\`Webhook Error: \${err.message}\`);
+  }
+});
+
+// Root
+app.get('/', (req, res) => res.send('Telegram Bot Server Running'));
+
+// Start
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(\`Server running on port \${PORT}\`);
+  bot.launch().then(() => console.log('Bot launched')).catch(e => console.error('Bot launch failed', e));
+});
+
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
+`;
+
+const targetPath = path.resolve(__dirname, '../server.js');
+console.log('Writing to', targetPath);
+fs.writeFileSync(targetPath, serverCode);
+console.log('Done');
