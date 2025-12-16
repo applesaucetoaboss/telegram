@@ -1061,6 +1061,19 @@ bot.command('claim_60_credits', ctx => {
     saveDB();
     ctx.reply('Success! Added 60 points to your account.');
 });
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  if (err && err.code === 'LIMIT_UNEXPECTED_FILE') {
+    return res.status(400).json({ error: 'Unexpected field. Please use "swap" and "target" fields.' });
+  }
+  if (err) {
+    console.error('Express Error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+  next();
+});
+
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);
     
