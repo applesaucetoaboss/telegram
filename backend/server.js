@@ -1,7 +1,7 @@
 require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 console.log('Server script started');
 console.log('Deploy tick', Date.now());
-try { console.log('Stripe key length:', (process.env.STRIPE_SECRET_KEY || '').length); } catch (_) {}
+try { console.log('Stripe key length:', (process.env.STRIPE_SECRET_KEY || '').length); } catch (_) { }
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -22,7 +22,7 @@ let stripe = null;
 if (stripeSecretKey) {
   stripe = require('stripe')(stripeSecretKey);
 } else {
-  try { console.warn('Missing STRIPE_SECRET_KEY. Stripe payments disabled until configured.'); } catch (_) {}
+  try { console.warn('Missing STRIPE_SECRET_KEY. Stripe payments disabled until configured.'); } catch (_) { }
 }
 console.log('Env', { BOT_TOKEN: !!process.env.BOT_TOKEN, PUBLIC_URL: !!process.env.PUBLIC_URL, PUBLIC_ORIGIN: !!process.env.PUBLIC_ORIGIN, CHANNEL_ID: process.env.CHANNEL_ID ? process.env.CHANNEL_ID : '' });
 
@@ -48,7 +48,7 @@ try {
       .filter(x => x && x.id && typeof x.points === 'number' && typeof x.usd === 'number')
       .map(x => ({ id: String(x.id), points: Number(x.points), usd: Number(x.usd), stars: Number(x.stars || 0), tierBonus: Number(x.tierBonus || 0) }));
   }
-} catch (_) {}
+} catch (_) { }
 
 function normalizePublicBase(value) {
   if (!value) return '';
@@ -123,7 +123,7 @@ function setUserContext(id, chatId) {
     if (!data.users[id]) return;
     data.users[id].last_context_chat_id = String(chatId || '');
     saveData(data);
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function today() {
@@ -142,8 +142,8 @@ function startMagicResultPoll(requestId, chatId) {
     const form = querystring.stringify({ request_id: String(requestId) });
     const reqOpts = { hostname: 'api.magicapi.dev', path: '/api/v1/capix/faceswap/result/', method: 'POST', headers: { 'x-magicapi-key': key, 'Content-Type': 'application/x-www-form-urlencoded', 'accept': 'application/json', 'Content-Length': Buffer.byteLength(form) } };
     const r = https.request(reqOpts, res2 => {
-      let buf='';
-      res2.on('data', c => buf+=c);
+      let buf = '';
+      res2.on('data', c => buf += c);
       res2.on('end', async () => {
         let j;
         try { j = JSON.parse(buf); } catch (_) { j = null; }
@@ -156,11 +156,11 @@ function startMagicResultPoll(requestId, chatId) {
               const dest = path.join(outputsDir, `faceswap_${Date.now()}${path.extname(String(url)) || ''}`);
               await downloadTo(String(url), dest);
               try { await bot.telegram.sendVideo(chatId, { source: fs.createReadStream(dest) }); }
-              catch (_) { try { await bot.telegram.sendPhoto(chatId, { source: fs.createReadStream(dest) }); } catch (e2) { try { await bot.telegram.sendDocument(chatId, { source: fs.createReadStream(dest) }); } catch (e3) { try { await bot.telegram.sendMessage(chatId, String(url)); } catch (e4) {} } } }
-            } catch (_) {}
+              catch (_) { try { await bot.telegram.sendPhoto(chatId, { source: fs.createReadStream(dest) }); } catch (e2) { try { await bot.telegram.sendDocument(chatId, { source: fs.createReadStream(dest) }); } catch (e3) { try { await bot.telegram.sendMessage(chatId, String(url)); } catch (e4) { } } } }
+            } catch (_) { }
           }
         } else if (status && /failed|error|canceled/i.test(String(status))) {
-          if (chatId) { try { await bot.telegram.sendMessage(chatId, 'Faceswap failed'); } catch (_) {} }
+          if (chatId) { try { await bot.telegram.sendMessage(chatId, 'Faceswap failed'); } catch (_) { } }
         } else {
           if (tries < 40) setTimeout(poll, 3000);
         }
@@ -360,7 +360,7 @@ app.post('/faceswap', upload.fields([{ name: 'photo' }, { name: 'video' }]), asy
     const pth = videoPath ? '/api/v1/capix/faceswap/faceswap/v1/video' : '/api/v1/capix/faceswap/faceswap/v1/image';
     const reqOpts = { hostname: 'api.magicapi.dev', path: pth, method: 'POST', headers: { 'x-magicapi-key': key, 'Content-Type': 'application/x-www-form-urlencoded', 'accept': 'application/json', 'Content-Length': Buffer.byteLength(form) } };
     const result = await new Promise((resolve, reject) => {
-      const r = https.request(reqOpts, res2 => { let buf=''; res2.on('data', c => buf+=c); res2.on('end', () => { try { resolve(JSON.parse(buf)); } catch (e) { reject(e); } }); }); r.on('error', reject); r.write(form); r.end();
+      const r = https.request(reqOpts, res2 => { let buf = ''; res2.on('data', c => buf += c); res2.on('end', () => { try { resolve(JSON.parse(buf)); } catch (e) { reject(e); } }); }); r.on('error', reject); r.write(form); r.end();
     });
     const requestId = result && (result.request_id || result.requestId || result.id);
     if (!requestId) return res.status(500).json({ error: 'no request id' });
@@ -396,14 +396,14 @@ app.post('/create-video', upload.fields([{ name: 'photo' }, { name: 'video' }]),
     });
 });
 
- 
+
 
 const { Telegraf, Markup } = require('telegraf');
 const bot = new Telegraf(process.env.BOT_TOKEN || '');
-bot.use(async (ctx, next) => { try { console.log('update', ctx.updateType, ctx.updateSubTypes || [], (ctx.from && ctx.from.id) || null, (ctx.chat && ctx.chat.type) || null, (ctx.chat && ctx.chat.id) || null, (ctx.chat && ctx.chat.title) || null); } catch (_) {} return next(); });
+bot.use(async (ctx, next) => { try { console.log('update', ctx.updateType, ctx.updateSubTypes || [], (ctx.from && ctx.from.id) || null, (ctx.chat && ctx.chat.type) || null, (ctx.chat && ctx.chat.id) || null, (ctx.chat && ctx.chat.title) || null); } catch (_) { } return next(); });
 
 let cachedBotId = null;
-bot.telegram.getMe().then(me => { cachedBotId = me.id; }).catch(() => {});
+bot.telegram.getMe().then(me => { cachedBotId = me.id; }).catch(() => { });
 const CHANNEL_PERMISSION_CACHE_MS = 60 * 1000;
 const channelPermissionCache = new Map();
 
@@ -413,7 +413,7 @@ async function toast(ctx, text, { alert = false } = {}) {
     try {
       await ctx.answerCbQuery(text, { show_alert: alert });
       return;
-    } catch (_) {}
+    } catch (_) { }
   }
   try { await ctx.reply(text); } catch (err) { console.error('toast send failed', err.message); }
 }
@@ -537,7 +537,7 @@ async function runFaceswap(u, photoPath, videoPath, chatId) {
   const pth = videoPath ? '/api/v1/capix/faceswap/faceswap/v1/video' : '/api/v1/capix/faceswap/faceswap/v1/image';
   const reqOpts = { hostname: 'api.magicapi.dev', path: pth, method: 'POST', headers: { 'x-magicapi-key': key, 'Content-Type': 'application/x-www-form-urlencoded', 'accept': 'application/json', 'Content-Length': Buffer.byteLength(form) } };
   const result = await new Promise((resolve, reject) => {
-    const r = https.request(reqOpts, res2 => { let buf=''; res2.on('data', c => buf+=c); res2.on('end', () => { try { resolve(JSON.parse(buf)); } catch (e) { reject(e); } }); }); r.on('error', reject); r.write(form); r.end();
+    const r = https.request(reqOpts, res2 => { let buf = ''; res2.on('data', c => buf += c); res2.on('end', () => { try { resolve(JSON.parse(buf)); } catch (e) { reject(e); } }); }); r.on('error', reject); r.write(form); r.end();
   });
   const requestId = result && (result.request_id || result.requestId || result.id);
   if (!requestId) return { error: 'submit error', required: 0, points: user.points };
@@ -561,7 +561,7 @@ async function runFaceswapImage(u, swapPhotoPath, targetPhotoPath, chatId) {
   const form = querystring.stringify({ target_url: targetUrl, swap_url: swapUrl });
   const reqOpts = { hostname: 'api.magicapi.dev', path: '/api/v1/capix/faceswap/faceswap/v1/image', method: 'POST', headers: { 'x-magicapi-key': key, 'Content-Type': 'application/x-www-form-urlencoded', 'accept': 'application/json', 'Content-Length': Buffer.byteLength(form) } };
   const result = await new Promise((resolve, reject) => {
-    const r = https.request(reqOpts, res2 => { let buf=''; res2.on('data', c => buf+=c); res2.on('end', () => { try { resolve(JSON.parse(buf)); } catch (e) { reject(e); } }); }); r.on('error', reject); r.write(form); r.end();
+    const r = https.request(reqOpts, res2 => { let buf = ''; res2.on('data', c => buf += c); res2.on('end', () => { try { resolve(JSON.parse(buf)); } catch (e) { reject(e); } }); }); r.on('error', reject); r.write(form); r.end();
   });
   const requestId = result && (result.request_id || result.requestId || result.id);
   if (!requestId) return { error: 'submit error', required: 0, points: user.points };
@@ -592,15 +592,15 @@ bot.start(async ctx => {
   }
   if (payload === 'faceswap') {
     pending[String(ctx.from.id)] = { mode: 'faceswap', swap: null, target: null };
-    try { await ctx.reply('Video Face Swap: Send a swap photo first, then a target video trimmed to the length you want. Cost: 3 points per second.'); } catch (_) {}
+    try { await ctx.reply('Video Face Swap: Send a swap photo first, then a target video trimmed to the length you want. Cost: 3 points per second.'); } catch (_) { }
   }
   if (payload === 'imageswap') {
     pending[String(ctx.from.id)] = { mode: 'imageswap', swap: null, target: null };
-    try { await ctx.reply('Image Face Swap: Send a swap photo first, then a target photo. Cost: 9 points.'); } catch (_) {}
+    try { await ctx.reply('Image Face Swap: Send a swap photo first, then a target photo. Cost: 9 points.'); } catch (_) { }
   }
   if (payload === 'createvideo') {
     pending[String(ctx.from.id)] = { mode: 'createvideo', photo: null, video: null };
-    try { await ctx.reply('Create Video: Send overlay photo, then base video. Cost: 10 points (10 seconds @ 1 point/sec).'); } catch (_) {}
+    try { await ctx.reply('Create Video: Send overlay photo, then base video. Cost: 10 points (10 seconds @ 1 point/sec).'); } catch (_) { }
   }
   const referral_link = `/?ref=${u.id}`;
   const botUsername = process.env.BOT_USERNAME || '';
@@ -679,7 +679,7 @@ bot.action('leaderboard', async ctx => {
 });
 
 bot.action('buy', async ctx => {
-  try { await ctx.answerCbQuery('Opening packages…'); } catch (_) {}
+  try { await ctx.answerCbQuery('Opening packages…'); } catch (_) { }
   if (!stripe) return toast(ctx, 'Payments are currently unavailable.', { alert: true });
   const id = ctx.from ? String(ctx.from.id) : null;
   const viewer = id ? getOrCreateUser(id) : null;
@@ -692,15 +692,15 @@ bot.action('buy', async ctx => {
       await ctx.reply('Select a package:', Markup.inlineKeyboard(rows));
     } else if (id) {
       await bot.telegram.sendMessage(id, 'Select a package:', { reply_markup: Markup.inlineKeyboard(rows).reply_markup });
-      try { await toast(ctx, 'Sent payment packages to you in private chat'); } catch (_) {}
+      try { await toast(ctx, 'Sent payment packages to you in private chat'); } catch (_) { }
     } else {
       await ctx.reply('Select a package:', Markup.inlineKeyboard(rows));
     }
-  } catch (_) {}
+  } catch (_) { }
 });
 
 bot.action(/buy:(.+)/, async ctx => {
-  try { await ctx.answerCbQuery('Preparing checkout…'); } catch (_) {}
+  try { await ctx.answerCbQuery('Preparing checkout…'); } catch (_) { }
   try {
     if (!stripe) { await toast(ctx, 'Payments are currently unavailable.', { alert: true }); return; }
     const tierId = ctx.match[1];
@@ -721,10 +721,10 @@ bot.action(/buy:(.+)/, async ctx => {
         cancel_url: `${origin}/?cancel=1`,
         metadata: { userId: String(id), tierId, chatId: chatMeta, promoterId: String(u.promoter_id || '') }
       });
-      try { await ctx.answerCbQuery('Checkout ready'); } catch (_) {}
+      try { await ctx.answerCbQuery('Checkout ready'); } catch (_) { }
     } catch (e) {
-      try { console.error('Stripe session create error', e); } catch (_) {}
-      try { await ctx.reply(`Payment error: ${e.message}`); } catch (_) { try { await bot.telegram.sendMessage(id, `Payment error: ${e.message}`); } catch (__) {} }
+      try { console.error('Stripe session create error', e); } catch (_) { }
+      try { await ctx.reply(`Payment error: ${e.message}`); } catch (_) { try { await bot.telegram.sendMessage(id, `Payment error: ${e.message}`); } catch (__) { } }
       return;
     }
     const kb = Markup.inlineKeyboard([
@@ -738,11 +738,11 @@ bot.action(/buy:(.+)/, async ctx => {
         await ctx.reply('Complete your purchase, then tap Confirm:', kb);
       } else {
         await bot.telegram.sendMessage(id, 'Complete your purchase, then tap Confirm:', { reply_markup: kb.reply_markup });
-        try { await toast(ctx, 'Sent payment link to you in private chat'); } catch (_) {}
+        try { await toast(ctx, 'Sent payment link to you in private chat'); } catch (_) { }
       }
-    } catch (_) {}
+    } catch (_) { }
   } catch (e) {
-    try { await ctx.reply(`Error: ${e.message}`); } catch (_) {}
+    try { await ctx.reply(`Error: ${e.message}`); } catch (_) { }
   }
 });
 
@@ -786,7 +786,7 @@ bot.action(/confirm:(.+)/, async ctx => {
   }
   data.purchases[sessionId] = true;
   saveData(data);
-  try { if (canPost) { await ctx.reply(`Payment confirmed. Credited ${addPoints} points. Balance: ${u.points}`); } else { await bot.telegram.sendMessage(id, `Payment confirmed. Credited ${addPoints} points. Balance: ${u.points}`); } } catch (_) {}
+  try { if (canPost) { await ctx.reply(`Payment confirmed. Credited ${addPoints} points. Balance: ${u.points}`); } else { await bot.telegram.sendMessage(id, `Payment confirmed. Credited ${addPoints} points. Balance: ${u.points}`); } } catch (_) { }
 });
 
 bot.command('confirm', async ctx => {
@@ -918,7 +918,7 @@ bot.action('faceswap', async ctx => {
   pending[String(ctx.from.id)] = { mode: 'faceswap', swap: null, target: null, chatId: String(ctx.chat.id) };
   if ((ctx.chat && ctx.chat.type) === 'channel') { pendingChannel[String(ctx.chat.id)] = { mode: 'faceswap', uid: String(ctx.from.id), swap: null, target: null }; }
   setUserContext(String(ctx.from.id), String(ctx.chat.id));
-  try { await ctx.reply('Video Face Swap: Send a swap photo first, then a target video trimmed to the length you want. Cost: 3 points per second.'); } catch (_) {}
+  try { await ctx.reply('Video Face Swap: Send a swap photo first, then a target video trimmed to the length you want. Cost: 3 points per second.'); } catch (_) { }
 });
 
 bot.command('imageswap', async ctx => {
@@ -934,7 +934,7 @@ bot.action('imageswap', async ctx => {
   pending[String(ctx.from.id)] = { mode: 'imageswap', swap: null, target: null, chatId: String(ctx.chat.id) };
   if ((ctx.chat && ctx.chat.type) === 'channel') { pendingChannel[String(ctx.chat.id)] = { mode: 'imageswap', uid: String(ctx.from.id), swap: null, target: null }; }
   setUserContext(String(ctx.from.id), String(ctx.chat.id));
-  try { await ctx.reply('Image Face Swap: Send a swap photo first, then a target photo. Cost: 9 points.'); } catch (_) {}
+  try { await ctx.reply('Image Face Swap: Send a swap photo first, then a target photo. Cost: 9 points.'); } catch (_) { }
 });
 
 bot.action('createvideo', async ctx => {
@@ -942,7 +942,7 @@ bot.action('createvideo', async ctx => {
   pending[String(ctx.from.id)] = { mode: 'createvideo', photo: null, video: null, chatId: String(ctx.chat.id) };
   if ((ctx.chat && ctx.chat.type) === 'channel') { pendingChannel[String(ctx.chat.id)] = { mode: 'createvideo', uid: String(ctx.from.id), photo: null, video: null }; }
   setUserContext(String(ctx.from.id), String(ctx.chat.id));
-  try { await ctx.reply('Create Video: Send overlay photo, then base video. Cost: 10 points (10 seconds @ 1 point/sec).'); } catch (_) {}
+  try { await ctx.reply('Create Video: Send overlay photo, then base video. Cost: 10 points (10 seconds @ 1 point/sec).'); } catch (_) { }
 });
 
 bot.on('photo', async ctx => {
@@ -1001,7 +1001,7 @@ bot.on('photo', async ctx => {
       await ctx.reply('Now send base video.');
     }
   } catch (e) {
-    try { await ctx.reply(`Error: ${e.message}`); } catch (_) {}
+    try { await ctx.reply(`Error: ${e.message}`); } catch (_) { }
   }
 });
 
@@ -1090,42 +1090,42 @@ bot.on('video', async ctx => {
       }
     }
   } catch (e) {
-    try { await ctx.reply(`Error: ${e.message}`); } catch (_) {}
+    try { await ctx.reply(`Error: ${e.message}`); } catch (_) { }
   }
 });
 
-bot.on('message', async ctx => {
-  const type = ctx.chat && ctx.chat.type;
-  if (type === 'group' || type === 'supergroup') {
-    const kb = Markup.inlineKeyboard([
-      [Markup.button.callback('Image Face Swap', 'imageswap'), Markup.button.callback('Video Face Swap', 'faceswap')],
-      [Markup.button.callback('Buy Points', 'buy'), Markup.button.callback('Prices', 'pricing')],
-      [Markup.button.callback('Help', 'help'), Markup.button.callback('Promote', 'promote')],
-      [Markup.button.callback('Menu', 'menu')]
-    ]);
-    const lines = PRICING.map(t => `${t.points} points / $${t.usd}`);
-    await ctx.reply(`Faceswap Service\nImage Face Swap: send swap photo, then target photo. Cost: 9 points.\nVideo Face Swap: send swap photo, then target video trimmed to the length you want. Cost: 3 points per second.\n\nPrices (point packages):\n${lines.join('\n')}`, kb);
-  }
-});
+// bot.on('message', async ctx => {
+//   const type = ctx.chat && ctx.chat.type;
+//   if (type === 'group' || type === 'supergroup') {
+//     const kb = Markup.inlineKeyboard([
+//       [Markup.button.callback('Image Face Swap', 'imageswap'), Markup.button.callback('Video Face Swap', 'faceswap')],
+//       [Markup.button.callback('Buy Points', 'buy'), Markup.button.callback('Prices', 'pricing')],
+//       [Markup.button.callback('Help', 'help'), Markup.button.callback('Promote', 'promote')],
+//       [Markup.button.callback('Menu', 'menu')]
+//     ]);
+//     const lines = PRICING.map(t => `${t.points} points / $${t.usd}`);
+//     await ctx.reply(`Faceswap Service\nImage Face Swap: send swap photo, then target photo. Cost: 9 points.\nVideo Face Swap: send swap photo, then target video trimmed to the length you want. Cost: 3 points per second.\n\nPrices (point packages):\n${lines.join('\n')}`, kb);
+//   }
+// });
 
-bot.on('chat_member', async ctx => {
-  const type = ctx.chat && ctx.chat.type;
-  if (type === 'group' || type === 'supergroup' || type === 'channel') {
-    const kb = Markup.inlineKeyboard([
-      [Markup.button.callback('Image Face Swap', 'imageswap'), Markup.button.callback('Video Face Swap', 'faceswap')],
-      [Markup.button.callback('Buy Points', 'buy'), Markup.button.callback('Prices', 'pricing')],
-      [Markup.button.callback('Help', 'help'), Markup.button.callback('Promote', 'promote')],
-      [Markup.button.callback('Menu', 'menu')]
-    ]);
-    const lines = PRICING.map(t => `${t.points} points / $${t.usd}`);
-    await ctx.reply(`Faceswap Service\nImage Face Swap: send swap photo, then target photo. Cost: 9 points.\nVideo Face Swap: send swap photo, then target video trimmed to the length you want. Cost: 3 points per second.\n\nPrices (point packages):\n${lines.join('\n')}`, kb);
-  }
-});
+// bot.on('chat_member', async ctx => {
+//   const type = ctx.chat && ctx.chat.type;
+//   if (type === 'group' || type === 'supergroup' || type === 'channel') {
+//     const kb = Markup.inlineKeyboard([
+//       [Markup.button.callback('Image Face Swap', 'imageswap'), Markup.button.callback('Video Face Swap', 'faceswap')],
+//       [Markup.button.callback('Buy Points', 'buy'), Markup.button.callback('Prices', 'pricing')],
+//       [Markup.button.callback('Help', 'help'), Markup.button.callback('Promote', 'promote')],
+//       [Markup.button.callback('Menu', 'menu')]
+//     ]);
+//     const lines = PRICING.map(t => `${t.points} points / $${t.usd}`);
+//     await ctx.reply(`Faceswap Service\nImage Face Swap: send swap photo, then target photo. Cost: 9 points.\nVideo Face Swap: send swap photo, then target video trimmed to the length you want. Cost: 3 points per second.\n\nPrices (point packages):\n${lines.join('\n')}`, kb);
+//   }
+// });
 
 bot.on('my_chat_member', async ctx => {
   const id = ctx.chat && ctx.chat.id;
   if (!id) return;
-  try { await postChannelGreet(String(id)); } catch (_) {}
+  try { await postChannelGreet(String(id)); } catch (_) { }
 });
 
 bot.on('channel_post', async ctx => {
@@ -1134,18 +1134,18 @@ bot.on('channel_post', async ctx => {
   const post = ctx.channelPost || {};
   const text = post.text || '';
   if (text && /^\/chatid/i.test(text)) {
-    try { await ctx.reply(`chat.id: ${chatId}\nchat.type: ${ctx.chat.type}\nchat.title: ${ctx.chat.title || ''}`); } catch (_) {}
+    try { await ctx.reply(`chat.id: ${chatId}\nchat.type: ${ctx.chat.type}\nchat.title: ${ctx.chat.title || ''}`); } catch (_) { }
     return;
   }
   if (text && /^\/resolve\b/i.test(text)) {
     const parts = text.split(' ').filter(Boolean);
     const target = parts[1];
-    if (!target) { try { await ctx.reply('Provide @username or id'); } catch (_) {} return; }
+    if (!target) { try { await ctx.reply('Provide @username or id'); } catch (_) { } return; }
     try {
       const info = await bot.telegram.getChat(target);
-      try { await ctx.reply(`chat.id: ${String(info.id)}\nchat.type: ${info.type || ''}\nchat.title: ${info.title || ''}`); } catch (_) {}
+      try { await ctx.reply(`chat.id: ${String(info.id)}\nchat.type: ${info.type || ''}\nchat.title: ${info.title || ''}`); } catch (_) { }
     } catch (e) {
-      try { await ctx.reply('Unable to resolve'); } catch (_) {}
+      try { await ctx.reply('Unable to resolve'); } catch (_) { }
     }
     return;
   }
@@ -1275,7 +1275,7 @@ bot.on('channel_post', async ctx => {
       return;
     }
   } catch (e) {
-    try { await ctx.reply(`Error: ${e.message}`); } catch (_) {}
+    try { await ctx.reply(`Error: ${e.message}`); } catch (_) { }
   }
 });
 
@@ -1298,7 +1298,7 @@ if (process.env.BOT_TOKEN) {
   const shouldForcePolling = forcePolling === '1' || forcePolling === 'true' || forcePolling === 'yes';
   global.__botLaunchMode = 'none';
   if (shouldForcePolling) {
-    bot.telegram.deleteWebhook().catch(() => {});
+    bot.telegram.deleteWebhook().catch(() => { });
     bot.launch().then(() => { global.__botLaunchMode = 'polling'; console.log('Bot launched (forced polling)'); bot.telegram.getWebhookInfo().then(info => console.log('Webhook info', info)).catch(err => console.error('Webhook info err', err)); }).catch(err => console.error('Bot launch error', err));
   } else if ((process.env.PUBLIC_URL || process.env.PUBLIC_ORIGIN)) {
     try {
@@ -1310,7 +1310,7 @@ if (process.env.BOT_TOKEN) {
       const invalidBase = /(^https?:\/\/t\.me)/i.test(base) || /(^https?:\/\/localhost)/i.test(base) || /(^https?:\/\/127\.0\.0\.1)/i.test(base);
       if (invalidBase) {
         console.error('Invalid PUBLIC_URL/PUBLIC_ORIGIN for webhook:', base);
-        bot.telegram.deleteWebhook().catch(() => {});
+        bot.telegram.deleteWebhook().catch(() => { });
         bot.launch().then(() => { global.__botLaunchMode = 'polling'; console.log('Bot launched (invalid webhook base)'); bot.telegram.getWebhookInfo().then(info => console.log('Webhook info', info)).catch(err => console.error('Webhook info err', err)); }).catch(err => console.error('Bot launch error', err));
       } else {
         bot.telegram.setWebhook(`${base}${pathHook}`).then(() => {
@@ -1319,7 +1319,7 @@ if (process.env.BOT_TOKEN) {
           bot.telegram.getWebhookInfo().then(info => console.log('Webhook info', info)).catch(err => console.error('Webhook info err', err));
         }).catch(e => {
           console.error('Webhook set error', e);
-          bot.telegram.deleteWebhook().catch(() => {});
+          bot.telegram.deleteWebhook().catch(() => { });
           bot.launch().then(() => { global.__botLaunchMode = 'polling'; console.log('Bot launched (fallback)'); bot.telegram.getWebhookInfo().then(info => console.log('Webhook info', info)).catch(err => console.error('Webhook info err', err)); }).catch(err => console.error('Bot launch error', err));
         });
       }
@@ -1349,10 +1349,10 @@ function startWebhookMonitor() {
       const errMsg = info && info.last_error_message;
       if (errMsg) {
         console.error('Webhook delivery error', errMsg);
-        bot.telegram.deleteWebhook().catch(() => {});
+        bot.telegram.deleteWebhook().catch(() => { });
         bot.launch().then(() => { global.__botLaunchMode = 'polling'; console.log('Bot launched (fallback)'); bot.telegram.getWebhookInfo().then(info => console.log('Webhook info', info)).catch(err => console.error('Webhook info err', err)); }).catch(err => console.error('Bot launch error', err));
       }
-    } catch (e) {}
+    } catch (e) { }
   }, 30000);
 }
 startWebhookMonitor();
@@ -1371,7 +1371,7 @@ function channelGreetText() {
 async function postChannelGreet(chatId) {
   const kb = channelKeyboard();
   const msg = await bot.telegram.sendMessage(chatId, channelGreetText(), { reply_markup: kb.reply_markup });
-  try { await bot.telegram.pinChatMessage(chatId, msg.message_id); } catch (e) {}
+  try { await bot.telegram.pinChatMessage(chatId, msg.message_id); } catch (e) { }
   const data = loadData();
   data.channel = data.channel || {};
   data.channel[chatId] = data.channel[chatId] || {};
@@ -1393,11 +1393,11 @@ async function resolveChannelIds() {
       }
     }
     chs = Array.from(new Set(resolved)).filter(Boolean);
-  } catch (e) {}
+  } catch (e) { }
 }
 resolveChannelIds().then(() => {
   if (chs.length) {
-    for (const id of chs) postChannelGreet(id).catch(() => {});
+    for (const id of chs) postChannelGreet(id).catch(() => { });
     setInterval(() => {
       try {
         const data = loadData();
@@ -1405,12 +1405,12 @@ resolveChannelIds().then(() => {
           const lastMap = (data.channel && data.channel[id] && data.channel[id].last_greet_at) || 0;
           const lastLegacy = (data.channel && data.channel.last_greet_at) || 0;
           const last = Math.max(lastMap, lastLegacy);
-          if (Date.now() - last > 45 * 60 * 1000) postChannelGreet(id).catch(() => {});
+          if (Date.now() - last > 45 * 60 * 1000) postChannelGreet(id).catch(() => { });
         }
-      } catch (e) {}
+      } catch (e) { }
     }, 5 * 60 * 1000);
   }
-}).catch(() => {});
+}).catch(() => { });
 bot.action('help', async ctx => {
   await ctx.answerCbQuery();
   const kb = Markup.inlineKeyboard([
@@ -1476,7 +1476,7 @@ bot.command('promote', async ctx => {
   await ctx.reply('Share these links to promote. Purchases via your links credit you 20% and add promo counts.', kb);
 });
 
- 
+
 
 bot.action('promote', async ctx => {
   await ctx.answerCbQuery();
@@ -1528,6 +1528,6 @@ bot.action('refresh', async ctx => {
   try {
     await postChannelGreet(chatId);
   } catch (e) {
-    try { await ctx.reply('Unable to refresh menu. Ensure bot can post and pin.'); } catch (_) {}
+    try { await ctx.reply('Unable to refresh menu. Ensure bot can post and pin.'); } catch (_) { }
   }
 });
