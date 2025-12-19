@@ -1122,13 +1122,14 @@ bot.on('video', async ctx => {
 //   }
 // });
 
-bot.on('my_chat_member', async ctx => {
-  const id = ctx.chat && ctx.chat.id;
-  if (!id) return;
-  try { await postChannelGreet(String(id)); } catch (_) { }
-});
+// bot.on('my_chat_member', async ctx => {
+//   const id = ctx.chat && ctx.chat.id;
+//   if (!id) return;
+//   try { await postChannelGreet(String(id)); } catch (_) { }
+// });
 
 bot.on('channel_post', async ctx => {
+  return; // DISABLED TO PREVENT SPAM
   if (ctx.from && ctx.from.is_bot) return;
   const chatId = String(ctx.chat.id);
   const post = ctx.channelPost || {};
@@ -1395,22 +1396,22 @@ async function resolveChannelIds() {
     chs = Array.from(new Set(resolved)).filter(Boolean);
   } catch (e) { }
 }
-resolveChannelIds().then(() => {
-  if (chs.length) {
-    for (const id of chs) postChannelGreet(id).catch(() => { });
-    setInterval(() => {
-      try {
-        const data = loadData();
-        for (const id of chs) {
-          const lastMap = (data.channel && data.channel[id] && data.channel[id].last_greet_at) || 0;
-          const lastLegacy = (data.channel && data.channel.last_greet_at) || 0;
-          const last = Math.max(lastMap, lastLegacy);
-          if (Date.now() - last > 45 * 60 * 1000) postChannelGreet(id).catch(() => { });
-        }
-      } catch (e) { }
-    }, 5 * 60 * 1000);
-  }
-}).catch(() => { });
+// resolveChannelIds().then(() => {
+//   if (chs.length) {
+//     for (const id of chs) postChannelGreet(id).catch(() => { });
+//     setInterval(() => {
+//       try {
+//         const data = loadData();
+//         for (const id of chs) {
+//           const lastMap = (data.channel && data.channel[id] && data.channel[id].last_greet_at) || 0;
+//           const lastLegacy = (data.channel && data.channel.last_greet_at) || 0;
+//           const last = Math.max(lastMap, lastLegacy);
+//           if (Date.now() - last > 45 * 60 * 1000) postChannelGreet(id).catch(() => { });
+//         }
+//       } catch (e) { }
+//     }, 5 * 60 * 1000);
+//   }
+// }).catch(() => { });
 bot.action('help', async ctx => {
   await ctx.answerCbQuery();
   const kb = Markup.inlineKeyboard([
